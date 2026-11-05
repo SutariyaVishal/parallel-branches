@@ -10,9 +10,10 @@ import http.client
 import os
 import shlex
 import shutil
-import subprocess
 import sys
 import time
+
+import procs
 
 MAC_APPS = [
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -56,8 +57,7 @@ def launch(chrome, profile_dir, cdp_port, url, headless=False):
     # Extra flags for sandboxed runners, e.g. PB_CHROME_ARGS=--no-sandbox in CI containers.
     args.extend(shlex.split(os.environ.get("PB_CHROME_ARGS", "")))
     args.append(url)
-    return subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL, start_new_session=True)
+    return procs.spawn_program(args)
 
 
 def wait_for_cdp(cdp_port, timeout=30.0):

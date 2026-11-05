@@ -128,9 +128,22 @@ class DetectOtherStacksTests(TmpCase):
         self.assertEqual(stack["alternatives"], ["django"])
 
     def test_render_replaces_all_placeholders(self):
-        self.assertEqual(stacks.render("{PY} a {PORT} {HMR_PORT}", 4001, 4002, self.dir), "python3 a 4001 4002")
-        self.write(".venv/bin/python")
-        self.assertIn(".venv/bin/python", stacks.render("{PY}", 1, 2, self.dir))
+        system_python = "python3" if os.name != "nt" else "python"
+        self.assertEqual(stacks.render("{PY} a {PORT} {HMR_PORT}", 4001, 4002, self.dir),
+                         system_python + " a 4001 4002")
+        venv_python = os.path.join(".venv", "Scripts", "python.exe") if os.name == "nt" \
+            else os.path.join(".venv", "bin", "python")
+        self.write(venv_python.replace(os.sep, "/"))
+        self.assertIn(venv_python, stacks.render("{PY}", 1, 2, self.dir))
+
+    def test_python_path_with_spaces_is_quoted(self):
+        spaced = os.path.join(self.dir, "my project")
+        venv_python = os.path.join(".venv", "Scripts", "python.exe") if os.name == "nt" \
+            else os.path.join(".venv", "bin", "python")
+        self.write(venv_python.replace(os.sep, "/"), base=spaced)
+        rendered = stacks.render("{PY} manage.py", 1, 2, spaced)
+        self.assertTrue(rendered.startswith(("'", '"')), rendered)
+        self.assertIn("my project", rendered)
 
 
 class InstallPlanTests(TmpCase):
@@ -185,6 +198,8 @@ class InstallPlanTests(TmpCase):
         plan = stacks.plan_install(self.wt, self.main, {"family": "python"})
         self.assertIn(".venv", plan["cmd"])
         self.assertIn("requirements.txt", plan["cmd"])
+        if not shutil.which("uv"):
+            self.assertIn("-m pip", plan["cmd"])  # no hardcoded bin/ or Scripts/ pip path
 
     def test_other_families(self):
         self.write("Gemfile.lock", "", self.wt)

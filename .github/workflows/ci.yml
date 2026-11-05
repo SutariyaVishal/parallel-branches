@@ -19,6 +19,10 @@ jobs:
         include:
           - {os: ubuntu-22.04, python: "3.9"}   # setup-python has no 3.9 build for ubuntu-24.04
           - {os: ubuntu-latest, python: "3.12"}
+          - {os: macos-latest, python: "3.9"}
+          - {os: macos-latest, python: "3.12"}
+          - {os: windows-latest, python: "3.9"}
+          - {os: windows-latest, python: "3.12"}
     env:
       # Chrome cannot create its sandbox on hosted runners.
       PB_CHROME_ARGS: --no-sandbox

@@ -21,7 +21,7 @@ SCENARIOS = {s["id"]: s for s in run_evals.load_scenarios()}
 
 
 def cmd(repo, *args):
-    return "python3 %s --repo %s %s" % (PB, repo, " ".join(args))
+    return '"%s" "%s" --repo "%s" %s' % (sys.executable, PB, repo, " ".join(args))
 
 
 class TranscriptTests(unittest.TestCase):
@@ -132,6 +132,7 @@ class AllowlistTests(unittest.TestCase):
             self.assertRegex(rule, r"git (status|branch --list|branch -a|log|diff|worktree list|show)\*")
 
 
+@unittest.skipIf(os.name == "nt", "the graders parse POSIX-style shell commands")
 class OracleTests(unittest.TestCase):
     """A scripted agent that does the right thing must pass every check; a careless one must not."""
 
@@ -200,7 +201,7 @@ class OracleTests(unittest.TestCase):
         self.tearDown_state()
         results, _ = self.play("multi-service", [
             lambda r: cmd(r, "up feat-a --dry-run"),
-            lambda r: cmd(r, "up feat-a --cmd 'python3 -m http.server {PORT}'")],
+            lambda r: cmd(r, "up feat-a --cmd '%s -m http.server {PORT}'" % sys.executable)],
             "Started the web app at http://localhost:4210 and the api.")
         self.assertEqual(self.failed(results), ["state_extras_ok"])
 

@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -286,11 +287,18 @@ def suggested_config(suggestion):
                          for svc in suggestion["services"]]}
 
 
-def python_for(path):
-    venv = os.path.join(path, ".venv", "bin", "python")
+def shell_quote(text):
+    """Quote `text` for the shell that subprocess uses: cmd.exe on Windows, sh elsewhere."""
     if os.name == "nt":
-        venv = os.path.join(path, ".venv", "Scripts", "python.exe")
-    return venv if os.path.exists(venv) else ("python3" if os.name != "nt" else "python")
+        return '"%s"' % text if (" " in text or "&" in text) else text
+    return shlex.quote(text)
+
+
+def python_for(path):
+    """The interpreter command for a project: its .venv if it has one, otherwise the system Python."""
+    venv = os.path.join(path, ".venv", "Scripts", "python.exe") if os.name == "nt" \
+        else os.path.join(path, ".venv", "bin", "python")
+    return shell_quote(venv) if os.path.exists(venv) else ("python3" if os.name != "nt" else "python")
 
 
 def render(text, port, hmr_port, path, ports=None):
@@ -435,8 +443,12 @@ def plan_install(path, main, stack, fresh=False):
         if exists(path, "uv.lock") and uv:
             return {"cmd": "uv sync", "clone_from": None, "note": "install: uv sync"}
         if exists(path, "requirements.txt"):
-            cmd = ("uv venv .venv && uv pip install -r requirements.txt" if uv else
-                   "python3 -m venv .venv && .venv/bin/pip install -r requirements.txt")
+            if uv:
+                cmd = "uv venv .venv && uv pip install -r requirements.txt"
+            elif os.name == "nt":
+                cmd = "python -m venv .venv && .venv\\Scripts\\python.exe -m pip install -r requirements.txt"
+            else:
+                cmd = "python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt"
             return {"cmd": cmd, "clone_from": None, "note": "install: " + cmd}
         return None
     if family == "ruby" and exists(path, "Gemfile.lock"):

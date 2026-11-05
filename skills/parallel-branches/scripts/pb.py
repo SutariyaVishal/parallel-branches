@@ -17,7 +17,6 @@ import json
 import os
 import re
 import shutil
-import signal
 import socket
 import subprocess
 import sys
@@ -25,12 +24,9 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import devbrowser  # noqa: E402
+import procs  # noqa: E402
 import stacks  # noqa: E402
-
-try:
-    import fcntl
-except ImportError:  # Windows: run without locking
-    fcntl = None
+from procs import group_alive, listener_pgids, process_token, reap, stop_group  # noqa: E402,F401
 
 PORT_BASE = 4000
 PORT_SPAN = 1000
@@ -95,14 +91,8 @@ def slugify(branch):
 
 @contextlib.contextmanager
 def locked(state_dir):
-    os.makedirs(state_dir, exist_ok=True)
-    handle = open(os.path.join(state_dir, "state.lock"), "w")
-    try:
-        if fcntl:
-            fcntl.flock(handle, fcntl.LOCK_EX)
+    with procs.file_lock(os.path.join(state_dir, "state.lock")):
         yield
-    finally:
-        handle.close()
 
 
 def load_state(state_dir):
@@ -197,25 +187,6 @@ def allocate_ports(branch, state, extra_taken=(), key=None):
 
 # ------------------------------------------------------------------ processes
 
-def process_token(pid):
-    """A start-time string that changes if the PID is reused by another process."""
-    proc = subprocess.run(
-        ["ps", "-o", "lstart=", "-p", str(pid)],
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True,
-    )
-    return proc.stdout.strip() if proc.returncode == 0 else ""
-
-
-def group_alive(pgid):
-    try:
-        os.killpg(pgid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
 def entry_owns_process(entry):
     """True only if the recorded PID is still the process we started."""
     pid = entry.get("pid")
@@ -223,25 +194,6 @@ def entry_owns_process(entry):
     if not pid or not token or not group_alive(entry.get("pgid", pid)):
         return False
     return process_token(pid) == token
-
-
-def listener_pgids(port):
-    """Process-group ids listening on `port`, or None if lsof is unavailable."""
-    if not shutil.which("lsof"):
-        return None
-    proc = subprocess.run(
-        ["lsof", "-nP", "-t", "-iTCP:%d" % port, "-sTCP:LISTEN"],
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True,
-    )
-    pgids = set()
-    for pid in proc.stdout.split():
-        ps = subprocess.run(
-            ["ps", "-o", "pgid=", "-p", pid],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True,
-        )
-        if ps.stdout.strip().isdigit():
-            pgids.add(int(ps.stdout.strip()))
-    return pgids
 
 
 def http_probe(port, path="/", timeout=1.0):
@@ -314,34 +266,6 @@ def check_health(entry, path="/", verify_owner=True, mode="http"):
         if owners is not None and entry["pgid"] not in owners:
             return False, "port %d is answered by another process" % entry["port"]
     return True, ("HTTP %d" % status) if isinstance(status, int) else status
-
-
-def reap(pid):
-    """Collect a finished child process. A zombie leader makes its group look alive, and on macOS
-    a group of only zombies refuses signals with EPERM."""
-    try:
-        os.waitpid(pid, os.WNOHANG)
-    except OSError:  # not our child (ChildProcessError is an OSError)
-        pass
-
-
-def stop_group(pgid, grace=8.0):
-    """SIGTERM the process group, then SIGKILL whatever is left. True once the group is gone."""
-    for sig, wait in ((signal.SIGTERM, grace), (signal.SIGKILL, 3.0)):
-        try:
-            os.killpg(pgid, sig)
-        except ProcessLookupError:
-            return True
-        except PermissionError:
-            reap(pgid)
-            return not group_alive(pgid)
-        deadline = time.time() + wait
-        while time.time() < deadline:
-            reap(pgid)
-            if not group_alive(pgid):
-                return True
-            time.sleep(0.1)
-    return not group_alive(pgid)
 
 
 def tail(path, lines=15):
@@ -447,10 +371,7 @@ def launch(rec, cmd, cwd, env, log_path, timeout, health_path, mode, verify_owne
     """Start one service detached and wait until it answers. Returns (healthy, detail)."""
     rec["cmd"] = cmd
     with open(log_path, "w") as log:
-        proc = subprocess.Popen(
-            cmd, shell=True, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
-            stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
-        )
+        proc = procs.spawn(cmd, cwd, env, log)
     rec.update(pid=proc.pid, pgid=proc.pid, token=process_token(proc.pid), status="running")
     save()
     deadline = time.time() + timeout

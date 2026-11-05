@@ -13,8 +13,17 @@ import urllib.request
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 PB = os.path.join(ROOT, "skills", "parallel-branches", "scripts", "pb.py")
-SERVER = "python3 -m http.server {PORT} --bind 127.0.0.1"
+POSIX_ONLY = unittest.skipIf(os.name == "nt", "needs a POSIX shell")
+PY = '"%s"' % sys.executable  # the interpreter running the tests, quoted for either shell
+SERVER = PY + " -m http.server {PORT} --bind 127.0.0.1"
 GROUP_SERVER = "sh -c 'python3 -m http.server {PORT} --bind 127.0.0.1 & wait'"
+# Reads PORT from the environment, the way a typical dev server does. Used through `npm run dev`.
+SERVE_PY = ("import http.server, os, socketserver\n"
+            "socketserver.TCPServer.allow_reuse_address = True\n"
+            "http.server.test(HandlerClass=http.server.SimpleHTTPRequestHandler, "
+            "port=int(os.environ['PORT']), bind='127.0.0.1')\n")
+FAIL_CMD = PY + " -c \"import sys; print('boom', file=sys.stderr); sys.exit(3)\""
+SLEEP_CMD = PY + " -c \"import time; time.sleep(60)\""
 
 sys.path.insert(0, os.path.dirname(PB))
 from devbrowser import find_chrome  # noqa: E402
@@ -93,11 +102,12 @@ class UnitTests(unittest.TestCase):
             self.assertEqual(pb.load_state(tmp)["branches"]["x"]["port"], 4001)
 
     def test_stop_group_stops_a_child_of_this_process_without_waiting_or_crashing(self):
-        proc = subprocess.Popen("sleep 60", shell=True, start_new_session=True)  # we are its parent
+        proc = pb.procs.spawn(SLEEP_CMD, None, dict(os.environ), subprocess.DEVNULL)  # we are its parent
         started = __import__("time").time()
         self.assertTrue(pb.stop_group(proc.pid))
         self.assertLess(__import__("time").time() - started, 5)
         self.assertFalse(pb.group_alive(proc.pid))
+        proc.wait()  # reap(), inside stop_group, already collected it; this just tells Popen
 
     def test_render_command(self):
         self.assertEqual(pb.render_command("dev -p {PORT} --hmr {HMR_PORT}", 4001, 4002),
@@ -150,6 +160,7 @@ class CliTests(PbCase):
         status = json.loads(self.pb("status", "--json").stdout)
         self.assertEqual({r["live"] for r in status}, {"healthy"})
 
+    @POSIX_ONLY
     def test_down_stops_the_whole_process_group(self):
         _, rows = self.up("feat-a", cmd=GROUP_SERVER)
         port = rows[0]["port"]
@@ -160,7 +171,7 @@ class CliTests(PbCase):
         self.assertEqual(json.loads(self.pb("status", "--json").stdout)[0]["live"], "stopped")
 
     def test_failed_start_reports_log_and_exits_nonzero(self):
-        proc, rows = self.up("feat-a", cmd="echo boom >&2; exit 3")
+        proc, rows = self.up("feat-a", cmd=FAIL_CMD)
         self.assertEqual(proc.returncode, 1)
         self.assertIn("boom", rows[0]["note"])
         self.assertIn("exited with code 3", rows[0]["note"])
@@ -168,7 +179,7 @@ class CliTests(PbCase):
 
     def test_server_that_never_answers_times_out_cleanly(self):
         started = __import__("time").time()
-        proc = self.pb("up", "feat-a", "--cmd", "sleep 60", "--worktree-dir", self.wt, "--timeout", "2", "--json")
+        proc = self.pb("up", "feat-a", "--cmd", SLEEP_CMD, "--worktree-dir", self.wt, "--timeout", "2", "--json")
         rows = json.loads(proc.stdout)
         self.assertEqual(proc.returncode, 1, proc.stderr)
         self.assertIn("timed out", rows[0]["note"])
@@ -258,7 +269,7 @@ class CliTests(PbCase):
             json.dump(state, fh)
         out = self.pb("down", "feat-a").stdout
         self.assertIn("not killing", out)
-        os.kill(pid, 0)  # still alive
+        self.assertTrue(pb.group_alive(pid))  # still alive (os.kill(pid, 0) would terminate it on Windows)
         self.assertTrue(http_ok(port))
         state["branches"]["feat-a"]["token"] = real
         with open(self.state_path(), "w") as fh:
@@ -306,7 +317,8 @@ class DetectionCliTests(PbCase):
             self.git("add", name)
         self.git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", message)
 
-    NODE_FILES = {"package.json": json.dumps({"scripts": {"dev": "python3 -m http.server $PORT --bind 127.0.0.1"}}),
+    NODE_FILES = {"package.json": json.dumps({"scripts": {"dev": PY + " serve.py"}}),
+                  "serve.py": SERVE_PY,
                   ".parallel-branches.json": json.dumps({"install": "echo installed > installed.txt"})}
 
     def test_up_without_cmd_uses_detection_config_install_and_port_env(self):
@@ -378,11 +390,11 @@ class DetectionCliTests(PbCase):
         self.assertEqual(self.pb("detect", os.path.join(self.tmp)).returncode, 1)
 
 
-HTTP = "python3 -m http.server {PORT} --bind 127.0.0.1"
+HTTP = SERVER
 # Fails unless the api answers first, so a pass proves dependency order and the {url.api} template.
-WEB = ("python3 -c \"import urllib.request; urllib.request.urlopen('{url.api}/', timeout=2)\" "
-       "&& echo {url.api} > api_url.txt && exec python3 -m http.server {PORT} --bind 127.0.0.1")
-TCP_ONLY = ("python3 -c \"import socket,time; s=socket.socket(); "
+WEB = (PY + " -c \"import urllib.request, pathlib; urllib.request.urlopen('{url.api}/', timeout=2); "
+       "pathlib.Path('api_url.txt').write_text('{url.api}')\" && " + SERVER)
+TCP_ONLY = (PY + " -c \"import socket,time; s=socket.socket(); "
             "s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); "
             "s.bind(('127.0.0.1',{PORT})); s.listen(5); time.sleep(120)\"")
 
@@ -450,7 +462,7 @@ class MultiServiceTests(PbCase):
 
     def test_a_failing_service_stops_the_ones_already_started(self):
         self.configure([{"name": "api", "cmd": HTTP, "install": False},
-                        {"name": "web", "cmd": "echo boom >&2; exit 3", "depends_on": ["api"], "install": False}])
+                        {"name": "web", "cmd": FAIL_CMD, "depends_on": ["api"], "install": False}])
         proc, rows = self.up("dev-a", cmd=None)
         self.assertEqual(proc.returncode, 1)
         self.assertIn("service web", rows[0]["note"])
@@ -518,7 +530,7 @@ class MultiServiceTests(PbCase):
         self.standard()
         _, rows = self.up("dev-a", cmd=None)
         api_pgid = rows[0]["extras"][0]["pgid"]
-        os.killpg(api_pgid, 15)  # our own test server; simulates a crashed service
+        pb.stop_group(api_pgid)  # our own test server; simulates a crashed service
         deadline = __import__("time").time() + 5
         while pb.group_alive(api_pgid) and __import__("time").time() < deadline:
             __import__("time").sleep(0.1)
@@ -540,7 +552,7 @@ class MultiServiceTests(PbCase):
 
 
 class MonorepoCliTests(PbCase):
-    SCRIPT = {"scripts": {"dev": "python3 -m http.server $PORT --bind 127.0.0.1"}}
+    SCRIPT = {"scripts": {"dev": PY + " serve.py"}}
 
     def monorepo(self):
         for rel in ("apps/api", "apps/web"):
@@ -548,6 +560,8 @@ class MonorepoCliTests(PbCase):
             os.makedirs(path)
             with open(os.path.join(path, "package.json"), "w") as fh:
                 json.dump(dict(self.SCRIPT, name=rel.split("/")[1]), fh)
+            with open(os.path.join(path, "serve.py"), "w") as fh:
+                fh.write(SERVE_PY)
         with open(os.path.join(self.repo, "package.json"), "w") as fh:
             json.dump({"private": True, "workspaces": ["apps/*"]}, fh)
         self.git("add", ".")
@@ -598,19 +612,15 @@ class BrowserArgsTests(unittest.TestCase):
         import devbrowser
         captured = {}
 
-        class FakePopen:
-            def __init__(self, args, **kwargs):
-                captured["args"] = args
-
-        real = devbrowser.subprocess.Popen
-        devbrowser.subprocess.Popen = FakePopen
+        real = devbrowser.procs.spawn_program
+        devbrowser.procs.spawn_program = lambda args: captured.setdefault("args", args)
         old = os.environ.get("PB_CHROME_ARGS")
         os.environ["PB_CHROME_ARGS"] = "--no-sandbox --disable-gpu"
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 devbrowser.launch("chrome", os.path.join(tmp, "p"), 9300, "http://localhost:1/", headless=True)
         finally:
-            devbrowser.subprocess.Popen = real
+            devbrowser.procs.spawn_program = real
             if old is None:
                 os.environ.pop("PB_CHROME_ARGS")
             else:

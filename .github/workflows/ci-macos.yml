@@ -1,0 +1,33 @@
+name: ci-macos
+
+# Separate from `ci` on purpose: on this repo the hosted macOS runners are sometimes never assigned,
+# and a queued job would hold the whole `ci` run open. Python 3.9 is macOS's system Python.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: tests (macos-latest, python 3.9)
+    runs-on: macos-latest
+    timeout-minutes: 20
+    env:
+      # Chrome cannot create its sandbox on hosted runners.
+      PB_CHROME_ARGS: --no-sandbox
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Validate skill and plugin manifests
+        run: python3 tests/validate_skill.py
+      - name: Unit and CLI tests
+        run: python3 -W error::ResourceWarning -m unittest discover tests/scripts -v

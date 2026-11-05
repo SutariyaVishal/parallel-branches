@@ -23,7 +23,7 @@ The tests start real dev servers (`python3 -m http.server`) and, if Chrome or Ch
 
 `tests/evals/scenarios.json` describes what a good agent does, and `tests/evals/graders.py` checks it with deterministic rules. `tests/scripts/test_evals.py` runs a scripted agent through every scenario, so scenarios and graders stay consistent without calling a model.
 
-To run the evals against real models (this spends money and lets the model run shell commands in a throwaway repo):
+To run the evals against real models (this spends money and lets the model run shell commands in a throwaway repo). The agent is limited to this repo's `pb.py`, read-only git and reads inside the temp directory. That is a guard, not a sandbox, because `pb.py up --cmd` runs a shell command by design. Use a disposable container or VM with no credentials for models you do not fully trust:
 
 ```
 python3 tests/evals/run_evals.py --dry-run                      # show what would run

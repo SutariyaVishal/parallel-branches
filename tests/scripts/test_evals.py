@@ -108,6 +108,23 @@ class CheckTests(unittest.TestCase):
                 self.assertIn(check["type"], graders.CHECKS, scenario["id"])
 
 
+class AllowlistTests(unittest.TestCase):
+    def test_eval_agent_is_not_given_arbitrary_code_network_or_wide_reads(self):
+        tools = run_evals.allowed_tools("/tmp/pb-eval-x")
+        joined = " ".join(tools)
+        for forbidden in ("Bash(python3 *)", "curl", "npm", "cat", "Bash(git *)", "Bash(rm", "Bash(sh"):
+            self.assertNotIn(forbidden, joined)
+        self.assertNotIn("Bash(git branch*)", tools)  # would allow `git branch -D`
+        self.assertIn("Bash(python3 %s *)" % PB, tools)
+        self.assertIn("Read(//tmp/pb-eval-x/**)", tools)
+        self.assertNotIn("Read", [t for t in tools if "(" not in t])  # no unscoped Read
+
+    def test_git_rules_are_read_only(self):
+        git_rules = [t for t in run_evals.allowed_tools("/x") if t.startswith("Bash(git")]
+        for rule in git_rules:
+            self.assertRegex(rule, r"git (status|branch --list|branch -a|log|diff|worktree list|show)\*")
+
+
 class OracleTests(unittest.TestCase):
     """A scripted agent that does the right thing must pass every check; a careless one must not."""
 

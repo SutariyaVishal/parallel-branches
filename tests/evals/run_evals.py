@@ -4,6 +4,11 @@
 This SPENDS MONEY and lets a model run shell commands inside a throwaway repository, so it
 refuses to run without --yes. Use --dry-run to see exactly what would be executed.
 
+Isolation: the agent is limited to this repo's pb.py, read-only git, and reads inside the
+throwaway directory. That is a guard, not a sandbox: `pb.py up --cmd ...` runs a shell command
+by design, so run the evals in a disposable container or VM with no credentials mounted
+and no network beyond localhost whenever you test models you do not fully trust.
+
 Examples:
   python3 tests/evals/run_evals.py --dry-run
   python3 tests/evals/run_evals.py --yes --models haiku,sonnet --scenarios side-by-side
@@ -27,8 +32,21 @@ sys.path.insert(0, HERE)
 import fixtures  # noqa: E402
 import graders  # noqa: E402
 
-ALLOWED_TOOLS = ["Bash(python3 *)", "Bash(git *)", "Bash(ls *)", "Bash(cat *)", "Bash(curl *)",
-                 "Bash(npm *)", "Bash(lsof *)", "Bash(ps *)", "Read", "Grep", "Glob"]
+READ_ONLY_GIT = ["status", "branch --list", "branch -a", "log", "diff", "worktree list", "show"]
+
+
+def allowed_tools(root):
+    """The only tools an eval agent may use: this repo's pb.py, read-only git, and reads inside `root`.
+
+    Deliberately no bare `python3`, `curl`, `npm`, `cat` or unscoped `Read`, so the agent cannot run
+    arbitrary code, reach the network or read files outside the throwaway directory. Absolute
+    paths in permission rules start with `//`.
+    """
+    tools = ["Bash(python3 %s *)" % fixtures.PB]
+    tools += ["Bash(git %s*)" % sub for sub in READ_ONLY_GIT]
+    scope = "/%s/**" % root  # root is absolute, so this yields the `//abs/path/**` form
+    tools += ["Read(%s)" % scope, "Grep(%s)" % scope, "Glob(%s)" % scope]
+    return tools
 
 
 def load_scenarios(path=None):
@@ -61,9 +79,9 @@ def collect_state(repo):
     return {"branches": branches, "repo_clean": not dirty}
 
 
-def claude_command(args, model, prompt):
+def claude_command(args, model, prompt, root="/<tmp>"):
     cmd = ["claude", "-p", prompt, "--model", model, "--output-format", "stream-json", "--verbose",
-           "--permission-mode", "dontAsk", "--allowedTools", *ALLOWED_TOOLS,
+           "--permission-mode", "dontAsk", "--allowedTools", *allowed_tools(root),
            "--max-budget-usd", str(args.max_budget_usd), "--no-session-persistence",
            "--setting-sources", "project"]
     if not args.baseline:
@@ -76,7 +94,7 @@ def run_one(args, scenario, model, out_dir):
     try:
         repo = prepare(scenario, root)
         started = time.time()
-        proc = subprocess.run(claude_command(args, model, scenario["prompt"]), cwd=repo,
+        proc = subprocess.run(claude_command(args, model, scenario["prompt"], os.path.realpath(root)), cwd=repo,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True,
                               timeout=args.timeout)
         commands, final_text = graders.parse_transcript(proc.stdout.splitlines())

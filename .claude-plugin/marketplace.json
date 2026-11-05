@@ -1,0 +1,11 @@
+{
+  "name": "parallel-branches",
+  "owner": { "name": "Vishal Sutariya" },
+  "plugins": [
+    {
+      "name": "parallel-branches",
+      "source": "./",
+      "description": "Run several git branches side by side, each with its own worktree, dev server and port."
+    }
+  ]
+}

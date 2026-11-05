@@ -192,6 +192,18 @@ class OracleTests(unittest.TestCase):
         self.repos = []
         self.root = os.path.realpath(tempfile.mkdtemp(prefix="pb-oracle-"))
 
+    def test_multi_service_oracle_passes_and_single_command_agent_fails(self):
+        results, _ = self.play("multi-service", [
+            lambda r: cmd(r, "up feat-a --dry-run --json"), lambda r: cmd(r, "up feat-a")],
+            "Started feat-a: the web app is at http://localhost:4210 and its api at http://localhost:4320.")
+        self.assertEqual(self.failed(results), [])
+        self.tearDown_state()
+        results, _ = self.play("multi-service", [
+            lambda r: cmd(r, "up feat-a --dry-run"),
+            lambda r: cmd(r, "up feat-a --cmd 'python3 -m http.server {PORT}'")],
+            "Started the web app at http://localhost:4210 and the api.")
+        self.assertEqual(self.failed(results), ["state_extras_ok"])
+
     def test_teardown_oracle_passes_and_force_kill_agent_fails(self):
         results, repo = self.play("safe-teardown", [lambda r: cmd(r, "down --all"), lambda r: cmd(r, "clean --yes")],
                                   "Stopped both. feat-b has uncommitted changes, so its worktree was left in place.")

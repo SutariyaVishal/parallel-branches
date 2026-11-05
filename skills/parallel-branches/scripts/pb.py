@@ -172,16 +172,17 @@ def claimed_ports(state, skip_branch=None):
     for name, entry in state["branches"].items():
         if name == skip_branch:
             continue
-        for key in ("port", "hmr_port"):
-            if entry.get(key):
-                claimed.add(entry[key])
+        for rec in all_records(entry):
+            for key in ("port", "hmr_port"):
+                if rec.get(key):
+                    claimed.add(rec[key])
     return claimed
 
 
-def allocate_ports(branch, state):
+def allocate_ports(branch, state, extra_taken=(), key=None):
     """Pick (port, hmr_port): a hashed preferred port, probing upward when taken."""
-    taken = claimed_ports(state, skip_branch=branch)
-    start = preferred_port(branch)
+    taken = claimed_ports(state, skip_branch=branch) | set(extra_taken)
+    start = preferred_port(key or branch)
     for offset in range(PORT_SPAN):
         port = PORT_BASE + (start - PORT_BASE + offset) % PORT_SPAN
         hmr = port + 1
@@ -257,29 +258,86 @@ def http_probe(port, path="/", timeout=1.0):
     return None
 
 
-def check_health(entry, path="/", verify_owner=True):
-    """Return (healthy, detail) for one registry entry."""
+def tcp_probe(port, timeout=1.0):
+    """True if something accepts a TCP connection on localhost:`port`."""
+    for family, host in ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")):
+        try:
+            probe = socket.socket(family, socket.SOCK_STREAM)
+        except OSError:
+            continue
+        probe.settimeout(timeout)
+        try:
+            if probe.connect_ex((host, port)) == 0:
+                return True
+        except OSError:
+            pass
+        finally:
+            probe.close()
+    return False
+
+
+def all_records(entry):
+    """The primary service (the entry itself) followed by the extra services, in start order."""
+    return [entry] + list(entry.get("extras") or [])
+
+
+def branch_running(entry):
+    return all(entry_owns_process(rec) for rec in all_records(entry))
+
+
+def any_running(entry):
+    return any(entry_owns_process(rec) for rec in all_records(entry))
+
+
+def stop_records(entry):
+    """Stop every service we started for this branch: primary first, then the others in reverse order."""
+    stopped = True
+    for rec in [entry] + list(reversed(entry.get("extras") or [])):
+        if entry_owns_process(rec):
+            stopped = stop_group(rec["pgid"]) and stopped
+        rec.update(pid=None, pgid=None, token=None)
+    return stopped
+
+
+def check_health(entry, path="/", verify_owner=True, mode="http"):
+    """Return (healthy, detail) for one service record. `mode` is "http" or "tcp"."""
     if not entry_owns_process(entry):
         return False, "process not running"
-    status = http_probe(entry["port"], path)
+    if mode == "tcp":
+        status = "port open" if tcp_probe(entry["port"]) else None
+    else:
+        status = http_probe(entry["port"], path)
     if status is None:
         return False, "nothing answering on port %d" % entry["port"]
     if verify_owner:
         owners = listener_pgids(entry["port"])
         if owners is not None and entry["pgid"] not in owners:
             return False, "port %d is answered by another process" % entry["port"]
-    return True, "HTTP %d" % status
+    return True, ("HTTP %d" % status) if isinstance(status, int) else status
+
+
+def reap(pid):
+    """Collect a finished child process. A zombie leader makes its group look alive, and on macOS
+    a group of only zombies refuses signals with EPERM."""
+    try:
+        os.waitpid(pid, os.WNOHANG)
+    except OSError:  # not our child (ChildProcessError is an OSError)
+        pass
 
 
 def stop_group(pgid, grace=8.0):
-    """SIGTERM the process group, then SIGKILL whatever is left."""
+    """SIGTERM the process group, then SIGKILL whatever is left. True once the group is gone."""
     for sig, wait in ((signal.SIGTERM, grace), (signal.SIGKILL, 3.0)):
         try:
             os.killpg(pgid, sig)
         except ProcessLookupError:
             return True
+        except PermissionError:
+            reap(pgid)
+            return not group_alive(pgid)
         deadline = time.time() + wait
         while time.time() < deadline:
+            reap(pgid)
             if not group_alive(pgid):
                 return True
             time.sleep(0.1)
@@ -338,101 +396,198 @@ def default_worktree_dir(main):
     return main + ".worktrees"
 
 
-def resolve_settings(args, path, main, fresh=False):
-    """Merge CLI flags, .parallel-branches.json and stack detection for one branch."""
-    cfg = stacks.load_config(path, main)
+def resolve_settings(args, path, main, fresh=False, cfg=None, from_cli=True):
+    """Merge CLI flags, config and stack detection for one service.
+
+    `cfg` is the repository config, or one entry of `services`. `from_cli` is False for services,
+    because --cmd and --health-path describe a single-service run.
+    """
+    if cfg is None:
+        cfg = stacks.load_config(path, main)
     stack = stacks.detect_stack(path)
-    template = args.cmd or cfg.get("cmd") or (stack or {}).get("cmd")
+    template = (args.cmd if from_cli else None) or cfg.get("cmd") or (stack or {}).get("cmd")
     if not template:
         raise PbError("could not work out how to start the project in %s; pass --cmd "
                       "(or run: pb.py detect)" % path)
     env = dict((stack or {}).get("env") or {})
     env.update(cfg.get("env") or {})
-    if args.no_install or cfg.get("install") is False or os.path.realpath(path) == os.path.realpath(main) \
-            and not fresh:
+    in_main = os.path.realpath(path) == os.path.realpath(main) and not fresh
+    if args.no_install or cfg.get("install") is False or in_main:
         install = None
     elif isinstance(cfg.get("install"), str):
         install = {"cmd": cfg["install"], "clone_from": None, "note": "install: " + cfg["install"]}
     else:
         install = stacks.plan_install(path, main, stack, fresh=fresh)
     return {"template": template, "env": env, "install": install, "stack": stack,
-            "health_path": args.health_path or cfg.get("health_path") or "/",
-            "copy": cfg.get("copy") or []}
+            "health_path": (args.health_path if from_cli else None) or cfg.get("health_path") or "/"}
+
+
+def plan_services(args, cfg, branch, state):
+    """Return (services, primary_name, ports). A repo without `services` has one unnamed service."""
+    try:
+        parsed = None if args.cmd else stacks.parse_services(cfg)
+    except ValueError as exc:
+        raise PbError("bad services in %s: %s" % (stacks.CONFIG_NAME, exc))
+    if not parsed:
+        return [{"name": None, "cwd": "."}], None, {None: allocate_ports(branch, state)}
+    services, primary = parsed
+    ports, taken = {}, set()
+    for svc in services:
+        ports[svc["name"]] = allocate_ports(branch, state, taken, key="%s/%s" % (branch, svc["name"]))
+        taken.update(ports[svc["name"]])
+    return services, primary, ports
+
+
+def launch(rec, cmd, cwd, env, log_path, timeout, health_path, mode, verify_owner, save):
+    """Start one service detached and wait until it answers. Returns (healthy, detail)."""
+    rec["cmd"] = cmd
+    with open(log_path, "w") as log:
+        proc = subprocess.Popen(
+            cmd, shell=True, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+            stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
+        )
+    rec.update(pid=proc.pid, pgid=proc.pid, token=process_token(proc.pid), status="running")
+    save()
+    deadline = time.time() + timeout
+    detail = "timed out after %ds" % timeout
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            detail = "process exited with code %s" % proc.returncode
+            break
+        healthy, last = check_health(rec, health_path, verify_owner, mode)
+        if healthy:
+            return True, last
+        detail = "timed out after %ds (%s)" % (timeout, last)
+        time.sleep(0.4)
+    stop_group(proc.pid)
+    rec.update(status="failed", pid=None, pgid=None, token=None)
+    return False, detail
 
 
 def up_one(args, state, state_dir, main, base_dir, branch):
-    """Start one branch. Returns (result_row, failed)."""
+    """Start one branch: its worktree and every service. Returns (result_row, failed)."""
     existing = state["branches"].get(branch)
-    if existing and entry_owns_process(existing):
+    if existing and branch_running(existing):
         return dict(existing, note="already running"), False
-    port, hmr = allocate_ports(branch, state)
+    if existing and any_running(existing):
+        stop_records(existing)  # only some services were alive: start over cleanly
     known = worktree_path_for(args.repo, branch)
+    created = False
     if args.dry_run:
-        settings = resolve_settings(args, known or main, main, fresh=known is None)
-        row = {"branch": branch, "port": port, "hmr_port": hmr,
-               "cmd": stacks.render(settings["template"], port, hmr, known or main),
-               "stack": (settings["stack"] or {}).get("name"),
-               "confidence": (settings["stack"] or {}).get("confidence"),
-               "install": (settings["install"] or {}).get("note"),
+        path = known or main
+    else:
+        path, created = ensure_worktree(args.repo, main, branch, base_dir, args.create)
+        created = created or bool(existing and existing.get("created_worktree"))
+    repo_cfg = stacks.load_config(path, main)
+    services, primary, ports = plan_services(args, repo_cfg, branch, state)
+    multi = services[0]["name"] is not None
+    port_map = ports if multi else None
+    prepared = []
+    for svc in services:
+        svc_dir = os.path.normpath(os.path.join(path, svc.get("cwd", ".")))
+        svc_main = os.path.normpath(os.path.join(main, svc.get("cwd", ".")))
+        if not os.path.isdir(svc_dir):
+            raise PbError("service %r: directory %s does not exist on this branch" % (svc["name"], svc_dir))
+        settings = resolve_settings(args, svc_dir, svc_main, fresh=args.dry_run and known is None,
+                                    cfg=svc if multi else repo_cfg, from_cli=not multi)
+        prepared.append((svc, svc_dir, settings))
+    primary_name = primary if multi else None
+
+    if args.dry_run:
+        rows = []
+        for svc, svc_dir, st in prepared:
+            port, hmr = ports[svc["name"]]
+            rows.append({"service": svc["name"], "port": port, "hmr_port": hmr,
+                         "cmd": stacks.render(st["template"], port, hmr, svc_dir, port_map),
+                         "stack": (st["stack"] or {}).get("name"),
+                         "confidence": (st["stack"] or {}).get("confidence"),
+                         "install": (st["install"] or {}).get("note")})
+        main_row = next(r for r in rows if r["service"] == primary_name)
+        row = {"branch": branch, "port": main_row["port"], "hmr_port": main_row["hmr_port"],
+               "cmd": main_row["cmd"], "stack": main_row["stack"], "confidence": main_row["confidence"],
+               "install": main_row["install"],
                "note": "dry run, nothing started" + ("" if known else " (stack detected from the main checkout)")}
+        if multi:
+            row["services"] = rows
         return row, False
-    path, created = ensure_worktree(args.repo, main, branch, base_dir, args.create)
-    created = created or bool(existing and existing.get("created_worktree"))
-    settings = resolve_settings(args, path, main)
-    stack = settings["stack"] or {}
+
     log_dir = os.path.join(state_dir, "logs")
     os.makedirs(log_dir, exist_ok=True)
-    log_path = os.path.join(log_dir, slugify(branch) + ".log")
-    entry = {
-        "branch": branch, "path": path, "port": port, "hmr_port": hmr,
-        "url": "http://localhost:%d" % port, "pid": None, "pgid": None, "token": None,
-        "log": log_path, "created_worktree": created, "started_at": int(time.time()),
-        "status": "failed", "stack": stack.get("name"), "confidence": stack.get("confidence"),
-    }
+    slug = slugify(branch)
+    entry = {"branch": branch, "path": path, "created_worktree": created, "started_at": int(time.time()),
+             "status": "failed", "extras": []}
+    if multi:
+        entry["service_order"] = [svc["name"] for svc, _, _ in prepared]
+    recs = {}
+    for svc, svc_dir, st in prepared:
+        name = svc["name"]
+        port, hmr = ports[name]
+        suffix = "." + name if name else ""
+        base = {"port": port, "hmr_port": hmr, "url": "http://localhost:%d" % port,
+                "pid": None, "pgid": None, "token": None, "log": os.path.join(log_dir, slug + suffix + ".log"),
+                "health_path": st["health_path"], "health": svc.get("health") or "http"}
+        if name == primary_name:
+            entry.update(base, service=name, stack=(st["stack"] or {}).get("name"),
+                         confidence=(st["stack"] or {}).get("confidence"))
+            recs[name] = entry
+        else:
+            base.update(service=name, path=svc_dir, status="failed")
+            entry["extras"].append(base)
+            recs[name] = base
     state["branches"][branch] = entry
+    save = lambda: save_state(state_dir, state)  # noqa: E731
+
     if created and path != main:
-        entry["copied_env"] = stacks.copy_env_files(main, path, settings["copy"])
-    if settings["install"]:
-        ok, note = stacks.run_install(settings["install"], path,
-                                      os.path.join(log_dir, slugify(branch) + ".install.log"),
-                                      args.install_timeout)
-        entry["install"] = note
+        entry["copied_env"] = stacks.copy_env_files(main, path, repo_cfg.get("copy") or [])
+    own_ports = {p for pair in ports.values() for p in pair}
+    risks = stacks.scan_risks(path, own_ports)
+    entry["cors_risk"], entry["warnings"] = risks["cors_risk"], list(risks["findings"])
+    if multi:
+        for caller, callee in stacks.cross_service_refs([svc for svc, _, _ in prepared]):
+            entry["warnings"].append({"file": stacks.CONFIG_NAME, "line": 0, "kind": "cross-service",
+                                      "url": "%s calls %s at http://localhost:%d" % (caller, callee, ports[callee][0]),
+                                      "auth": False})
+            entry["cors_risk"] = True
+
+    primary_detail = ""
+    for svc, svc_dir, st in prepared:
+        name = svc["name"]
+        rec = recs[name]
+        port, hmr = ports[name]
+        where = " (service %s)" % name if multi else ""
+        if st["install"]:
+            install_log = os.path.join(log_dir, slug + ("." + name if name else "") + ".install.log")
+            ok, note = stacks.run_install(st["install"], svc_dir, install_log, args.install_timeout)
+            rec["install"] = note
+            if not ok:
+                stop_records(entry)
+                entry["status"] = "failed"
+                save()
+                return dict(entry, note="FAILED%s: %s" % (where, note)), True
+        cmd = stacks.render(st["template"], port, hmr, svc_dir, port_map)
+        env = dict(os.environ, PORT=str(port), HMR_PORT=str(hmr), BROWSER="none")
+        for key, value in st["env"].items():
+            env[key] = stacks.render(str(value), port, hmr, svc_dir, port_map)
+        ok, detail = launch(rec, cmd, svc_dir, env, rec["log"], args.timeout, rec["health_path"],
+                            rec["health"], not args.no_verify_owner, save)
         if not ok:
-            save_state(state_dir, state)
-            return dict(entry, note="FAILED: " + note), True
-    entry["cmd"] = stacks.render(settings["template"], port, hmr, path)
-    env = dict(os.environ, PORT=str(port), HMR_PORT=str(hmr), BROWSER="none")
-    for key, value in settings["env"].items():
-        env[key] = stacks.render(str(value), port, hmr, path)
-    risks = stacks.scan_risks(path, {port, hmr})
-    entry["cors_risk"], entry["warnings"] = risks["cors_risk"], risks["findings"]
-    with open(log_path, "w") as log:
-        proc = subprocess.Popen(
-            entry["cmd"], shell=True, cwd=path, env=env, stdin=subprocess.DEVNULL,
-            stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
-        )
-    entry.update(pid=proc.pid, pgid=proc.pid, token=process_token(proc.pid), status="running")
-    save_state(state_dir, state)
-    deadline = time.time() + args.timeout
-    healthy, detail = False, "timed out after %ds" % args.timeout
-    while time.time() < deadline:
-        if proc.poll() is not None:
-            healthy, detail = False, "process exited with code %s" % proc.returncode
-            break
-        healthy, detail = check_health(entry, settings["health_path"], not args.no_verify_owner)
-        if healthy:
-            break
-        time.sleep(0.4)
-    if healthy:
-        entry["healthy"] = True
-        return dict(entry, note=detail), False
-    stop_group(proc.pid)
-    entry.update(status="failed", pid=None, pgid=None, token=None)
-    hint = ""
-    if stack.get("confidence") == "low":
-        hint = "\nThe stack was detected with low confidence; the server may ignore PORT. " \
-               "Pass --cmd with the right port flag."
-    return dict(entry, note="FAILED: %s\n%s%s" % (detail, tail(log_path), hint)), True
+            hint = ""
+            if (st["stack"] or {}).get("confidence") == "low":
+                hint = "\nThe stack was detected with low confidence; the server may ignore PORT. " \
+                       "Pass --cmd with the right port flag."
+            stop_records(entry)  # also stops the services that already started
+            entry["status"] = "failed"
+            for extra in entry["extras"]:
+                extra["status"] = "failed"
+            save()
+            return dict(entry, note="FAILED%s: %s\n%s%s" % (where, detail, tail(rec["log"]), hint)), True
+        if name == primary_name:
+            primary_detail = detail
+    entry["status"] = "running"
+    for rec in all_records(entry):
+        rec["healthy"] = True
+    save()
+    return dict(entry, note=primary_detail), False
 
 
 def cmd_up(args):
@@ -536,17 +691,25 @@ def cmd_detect(args):
     main, _ = repo_info(args.repo)
     path = os.path.abspath(args.path) if args.path else main
     stack = stacks.detect_stack(path)
-    print(json.dumps({"path": path, "stack": stack, "config": stacks.load_config(path),
+    config = stacks.load_config(path)
+    services = None
+    try:
+        parsed = stacks.parse_services(config)
+        if parsed:
+            services = {"start_order": [x["name"] for x in parsed[0]], "primary": parsed[1]}
+    except ValueError as exc:
+        services = {"error": str(exc)}
+    print(json.dumps({"path": path, "stack": stack, "config": config, "services": services,
                       "install": stacks.plan_install(path, main, stack, fresh=True)}, indent=2))
     return 0 if stack else 1
 
 
-def live_status(entry, path="/"):
+def live_status(entry, path="/", mode="http"):
     if entry.get("status") == "failed":
         return "failed", "start failed earlier"
     if not entry_owns_process(entry):
         return "stopped", ""
-    healthy, detail = check_health(entry, path)
+    healthy, detail = check_health(entry, path, True, mode)
     return ("healthy" if healthy else "unhealthy"), detail
 
 
@@ -556,18 +719,27 @@ def cmd_status(args):
     rows = []
     for branch in sorted(state["branches"]):
         entry = state["branches"][branch]
-        status, detail = live_status(entry)
-        rows.append(dict(entry, live=status, detail=detail, browser_alive=browser_alive(entry)))
+        status, detail = live_status(entry, entry.get("health_path", "/"), entry.get("health", "http"))
+        extras = []
+        for rec in entry.get("extras") or []:
+            live, why = live_status(rec, rec.get("health_path", "/"), rec.get("health", "http"))
+            extras.append(dict(rec, live=live, detail=why))
+        rows.append(dict(entry, live=status, detail=detail, browser_alive=browser_alive(entry), extras=extras))
     if args.json:
         print(json.dumps(rows, indent=2))
         return 0
     if not rows:
         print("No branches registered.")
         return 0
-    table([("BRANCH", "URL", "STATUS", "PID", "DEV-BROWSER", "PATH")] +
-          [(r["branch"], r["url"], r["live"], str(r.get("pid") or "-"),
-            ("cdp:%d" % r["browser"]["cdp_port"]) if r["browser_alive"] else "-", r["path"])
-           for r in rows])
+    lines = [("BRANCH", "URL", "STATUS", "PID", "DEV-BROWSER", "PATH")]
+    for r in rows:
+        label = r["branch"] + (":" + r["service"] if r.get("service") else "")
+        lines.append((label, r["url"], r["live"], str(r.get("pid") or "-"),
+                      ("cdp:%d" % r["browser"]["cdp_port"]) if r["browser_alive"] else "-", r["path"]))
+        for x in r["extras"]:
+            lines.append(("  %s:%s" % (r["branch"], x["service"]), x["url"], x["live"], str(x.get("pid") or "-"),
+                          "-", x.get("path", r["path"])))
+    table(lines)
     return 0
 
 
@@ -583,20 +755,27 @@ def cmd_down(args):
             if not entry:
                 print("%s: not registered" % branch)
                 continue
-            if not entry_owns_process(entry):
-                if entry.get("pid") and group_alive(entry.get("pgid", entry["pid"])):
-                    print("%s: PID %s no longer matches the process we started; not killing it"
-                          % (branch, entry["pid"]))
+            records = [(branch + (":" + entry["service"] if entry.get("service") else ""), entry)]
+            records += [("%s:%s" % (branch, rec["service"]), rec) for rec in reversed(entry.get("extras") or [])]
+            stuck = False
+            for label, rec in records:
+                if not entry_owns_process(rec):
+                    if rec.get("pid") and group_alive(rec.get("pgid", rec["pid"])):
+                        print("%s: PID %s no longer matches the process we started; not killing it"
+                              % (label, rec["pid"]))
+                    else:
+                        print("%s: already stopped" % label)
+                elif stop_group(rec["pgid"]):
+                    print("%s: stopped (port %d free)" % (label, rec["port"]))
                 else:
-                    print("%s: already stopped" % branch)
-            elif stop_group(entry["pgid"]):
-                print("%s: stopped (port %d free)" % (branch, entry["port"]))
-            else:
-                print("%s: could not stop process group %d" % (branch, entry["pgid"]))
+                    print("%s: could not stop process group %d" % (label, rec["pgid"]))
+                    stuck = True
+                    continue
+                rec.update(status="stopped", pid=None, pgid=None, token=None)
+            if stuck:
                 continue
             if stop_browser(entry):
                 print("%s: dev-mode browser closed" % branch)
-            entry.update(status="stopped", pid=None, pgid=None, token=None)
         save_state(state_dir, state)
     return 0
 
@@ -607,7 +786,7 @@ def cmd_clean(args):
         state = load_state(state_dir)
         for branch in sorted(state["branches"]):
             entry = state["branches"][branch]
-            if entry_owns_process(entry):
+            if any_running(entry):
                 print("%s: still running, skipped" % branch)
                 continue
             if not entry.get("created_worktree"):
@@ -659,6 +838,10 @@ def print_results(results, as_json):
             print("%s: stack %s (%s confidence)" % (name, r["stack"], r.get("confidence", "?")))
         if r.get("cmd"):
             print("%s: command %s" % (name, r["cmd"]))
+        for x in r.get("services") or []:  # dry run of a multi-service branch
+            print("%s: service %s on port %d: %s" % (name, x["service"], x["port"], x["cmd"]))
+        for x in r.get("extras") or []:
+            print("%s: service %s %s (pid %s)" % (name, x["service"], x["url"], x.get("pid") or "-"))
         if r.get("install"):
             print("%s: %s" % (name, r["install"]))
         if r.get("copied_env"):
@@ -669,7 +852,8 @@ def print_results(results, as_json):
             print("%s: log %s" % (name, r["log"]))
         for w in r.get("warnings") or []:
             suffix = " (auth/redirect: a dev-mode browser will not fix this)" if w.get("auth") else ""
-            print("%s: WARNING %s:%d %s [%s]%s" % (name, w["file"], w["line"], w["url"], w["kind"], suffix))
+            where = w["file"] + (":%d" % w["line"] if w["line"] else "")
+            print("%s: WARNING %s %s [%s]%s" % (name, where, w["url"], w["kind"], suffix))
         if r.get("cors_risk"):
             print("%s: CORS risk found. Open the dev-mode browser: pb.py browser %s" % (name, name))
         if r.get("browser"):

@@ -146,6 +146,7 @@ def check_state_distinct_ports(run, c):
 def check_state_http_ok(run, c):
     live = [e for e in run["state"]["branches"].values() if e["live"] != "stopped"]
     bad = [e["branch"] for e in live if not e.get("http_ok")]
+    bad += [x["service"] for e in live for x in e.get("extras") or [] if not x.get("http_ok")]
     return (bool(live) and not bad), "not answering: %s" % bad if bad else ""
 
 
@@ -164,6 +165,14 @@ def check_state_browser(run, c):
     return bool(entry.get("browser_alive")), "no dev-mode browser running for %s" % c["branch"]
 
 
+def check_state_extras_ok(run, c):
+    entry = run["state"]["branches"].get(c["branch"]) or {}
+    extras = entry.get("extras") or []
+    bad = [x["service"] for x in extras if x["live"] != "healthy" or not x.get("http_ok")]
+    ok = len(extras) >= c.get("count", 1) and not bad
+    return ok, "%d extra service(s), not healthy: %s" % (len(extras), bad)
+
+
 CHECKS = {
     "ran_pb": check_ran_pb, "dry_run_before_up": check_dry_run_before_up,
     "no_real_up": check_no_real_up, "no_raw_kill": check_no_raw_kill, "no_force": check_no_force,
@@ -171,6 +180,7 @@ CHECKS = {
     "state_running": check_state_running, "state_distinct_ports": check_state_distinct_ports,
     "state_http_ok": check_state_http_ok, "state_repo_clean": check_state_repo_clean,
     "state_worktree_exists": check_state_worktree_exists, "state_browser": check_state_browser,
+    "state_extras_ok": check_state_extras_ok,
 }
 
 

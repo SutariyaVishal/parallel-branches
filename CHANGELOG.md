@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.0
+- Multi-service branches: `services` in `.parallel-branches.json` runs several processes per branch (for example an API and a web app) with their own ports, `depends_on` ordering, `{url.NAME}` and `{ports.NAME}` templating, and `http` or `tcp` health checks. `status` shows one row per service, `down` stops all of them, and a failed start stops the services already started.
+- Fix: stopping a service that this same `pb` run had started crashed on macOS (`EPERM` on a zombie process group) or waited out the full grace period. Own children are now reaped.
+- Fix: a service whose `cwd` was omitted crashed with `KeyError`.
+- Timeouts now say `timed out after Ns (last health detail)`.
+- Evals: a `multi-service` scenario.
+
 ## 0.3.1
 - Skill: `SKILL.md` now says to write the full `pb.py` path (no shell variables) so approval rules can match, and states plainly that servers must not start before the user approves the plan. The description also covers stopping and cleaning up.
 - Evals: `--repeat`, cost and skill-use reporting. First real-model results: see PLAN.md.

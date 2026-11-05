@@ -130,3 +130,12 @@ Run with `tests/evals/run_evals.py` against Haiku, Sonnet and Opus (model aliase
 Skill changes the evals drove: use the literal `pb.py` path instead of a shell variable (approval rules match literal text), mention stopping and cleaning up in the description (Sonnet did not load the skill for a teardown request), and make the approval rule explicit.
 
 Caveats: small samples (one run per cell, ten for the Haiku approval check); the graders were adjusted twice after reading agent output, so the final pass rate partly reflects grader tuning; no no-skill baseline (under the narrow allowlist it would mostly measure denials); the agent runs inside the user's own account, not a sandbox.
+
+## Phase 4: multi-service (v0.4.0)
+`services` in `.parallel-branches.json`: named processes per branch with `cwd`, `cmd`, `env`, `install`, `health_path`, `health` (http or tcp), `depends_on` and `primary`. Config only, no auto-detection of monorepo layouts. The primary service stays in the flat registry entry so single-service code paths and old state files are unchanged; the other services live in `extras`. Ports for all services are chosen before any starts, so `{url.NAME}` works in either direction of the start order.
+
+Verified by a real run: the Phase 0 host-plus-remote fixture started as two services, and the dev-mode browser read the cross-origin response. 104 tests. Real-model eval of the new `multi-service` scenario: 6 of 6 runs perfect across Haiku, Sonnet and Opus (two runs each, $0.64).
+
+Bugs the work found: stopping a same-run child hit `EPERM` on a zombie group on macOS (also latent on the single-service timeout path), and a missing default for `cwd`.
+
+Not done: monorepo auto-detection, restarting a single service, per-service logs in `status`, a service that needs a different port range, Windows.

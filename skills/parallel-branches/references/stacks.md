@@ -67,5 +67,38 @@ Optional, at the repository root. The worktree's copy wins over the main checkou
 | `env` | Extra environment variables. Values may use `{PORT}` and `{HMR_PORT}`. |
 | `health_path` | Path requested during the health check. Default `/`. |
 | `copy` | Extra glob patterns of git-ignored files to copy into new worktrees. |
+| `services` | Several processes for one branch. See below. When present, the top-level `cmd`, `install`, `env` and `health_path` are not used for starting. |
 
 These strings run in a shell. Read a repository's config before running it, the same way you would read its `package.json` scripts.
+
+## Several services per branch
+
+```json
+{
+  "services": [
+    {"name": "api", "cwd": "backend", "cmd": "python3 manage.py runserver 127.0.0.1:{PORT}"},
+    {"name": "web", "cwd": "frontend", "cmd": "npm run dev -- --port {PORT} --strictPort",
+     "env": {"API_URL": "{url.api}"}, "depends_on": ["api"], "primary": true}
+  ]
+}
+```
+
+| Key | Meaning |
+|---|---|
+| `name` | Required. Lowercase letters, digits and hyphens. Unique. |
+| `cwd` | Directory, relative to the worktree. Default `.`. Must stay inside the repository. |
+| `cmd`, `env`, `install` | As at the top level, per service. If `cmd` is missing, the stack in `cwd` is detected. |
+| `health_path` | Path requested during the health check. Default `/`. |
+| `health` | `http` (default) or `tcp` for services that do not speak HTTP, such as a queue. |
+| `depends_on` | Names of services that must answer before this one starts. Cycles are rejected. |
+| `primary` | Marks the service whose URL is the branch's address. At most one. Default: the last in the list. |
+
+Every service gets its own `{PORT}` and `{HMR_PORT}`. `{ports.NAME}` is another service's port and `{url.NAME}` is `http://localhost:<port>`. All ports are chosen before anything starts, so a service can refer to one that starts later.
+
+Behavior to know:
+- `--cmd` on the command line overrides `services` and runs one command.
+- `--health-path` and the top-level `cmd` apply only to single-service runs.
+- If any service fails to start, the services already started for that branch are stopped.
+- If only some services of a branch are alive when you run `up`, they are all stopped and restarted.
+- A service that uses `{url.OTHER}` is flagged as a CORS risk, because it calls another origin.
+- `copy` and env-file copying still apply once per branch, from the repository root.

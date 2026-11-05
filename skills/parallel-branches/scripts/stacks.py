@@ -176,9 +176,98 @@ def python_for(path):
     return venv if os.path.exists(venv) else ("python3" if os.name != "nt" else "python")
 
 
-def render(text, port, hmr_port, path):
-    return (text.replace("{PORT}", str(port)).replace("{HMR_PORT}", str(hmr_port))
+def render(text, port, hmr_port, path, ports=None):
+    """Fill in {PORT}, {HMR_PORT}, {PY} and, for multi-service setups, {ports.NAME} and {url.NAME}."""
+    text = (text.replace("{PORT}", str(port)).replace("{HMR_PORT}", str(hmr_port))
             .replace("{PY}", python_for(path)))
+    if ports:
+        def other(match):
+            number = ports[match.group(2)][0]
+            return str(number) if match.group(1) == "ports" else "http://localhost:%d" % number
+        text = REF_RE.sub(other, text)
+    return text
+
+
+# ------------------------------------------------------------------ services
+
+SERVICE_KEYS = {"name", "cwd", "cmd", "env", "install", "health_path", "health", "depends_on", "primary"}
+SERVICE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,30}$")
+REF_RE = re.compile(r"\{(ports|url)\.([a-z0-9-]+)\}")
+
+
+def parse_services(cfg):
+    """Validate `services` in a config. Returns None, or (services in start order, primary name).
+
+    Raises ValueError with a message the user can act on.
+    """
+    raw = cfg.get("services")
+    if raw is None:
+        return None
+    if not isinstance(raw, list) or not raw:
+        raise ValueError("services must be a non-empty list")
+    names = set()
+    for svc in raw:
+        if not isinstance(svc, dict):
+            raise ValueError("every service must be an object")
+        unknown = sorted(set(svc) - SERVICE_KEYS)
+        if unknown:
+            raise ValueError("unknown key(s) %s in service %r" % (unknown, svc.get("name")))
+        name = svc.get("name")
+        if not isinstance(name, str) or not SERVICE_NAME_RE.match(name):
+            raise ValueError("service name %r must be lowercase letters, digits and hyphens" % (name,))
+        if name in names:
+            raise ValueError("duplicate service name %r" % name)
+        names.add(name)
+        cwd = svc.get("cwd", ".")
+        if not isinstance(cwd, str) or os.path.isabs(cwd) or os.path.normpath(cwd).split(os.sep)[0] == "..":
+            raise ValueError("cwd of service %r must be a relative path inside the repository" % name)
+        if svc.get("health") not in (None, "http", "tcp"):
+            raise ValueError("health of service %r must be \"http\" or \"tcp\"" % name)
+        deps = svc.get("depends_on", [])
+        if not isinstance(deps, list) or not all(isinstance(d, str) for d in deps):
+            raise ValueError("depends_on of service %r must be a list of service names" % name)
+    by_name = {svc["name"]: svc for svc in raw}
+    for svc in raw:
+        for dep in svc.get("depends_on", []):
+            if dep not in by_name:
+                raise ValueError("service %r depends on unknown service %r" % (svc["name"], dep))
+        texts = [str(svc.get("cmd", ""))] + [str(v) for v in (svc.get("env") or {}).values()]
+        for text in texts:
+            for match in REF_RE.finditer(text):
+                if match.group(2) not in by_name:
+                    raise ValueError("service %r refers to unknown service %r" % (svc["name"], match.group(2)))
+    order, done, visiting = [], set(), set()
+
+    def visit(name):
+        if name in done:
+            return
+        if name in visiting:
+            raise ValueError("depends_on forms a cycle through %r" % name)
+        visiting.add(name)
+        for dep in by_name[name].get("depends_on", []):
+            visit(dep)
+        visiting.discard(name)
+        done.add(name)
+        order.append(by_name[name])
+
+    for svc in raw:
+        visit(svc["name"])
+    primaries = [svc["name"] for svc in raw if svc.get("primary")]
+    if len(primaries) > 1:
+        raise ValueError("only one service can be primary, found %s" % primaries)
+    return order, (primaries[0] if primaries else raw[-1]["name"])
+
+
+def cross_service_refs(services):
+    """(service, referenced service) pairs: a service that talks to another one on a different port."""
+    pairs = []
+    for svc in services:
+        texts = [str(svc.get("cmd", ""))] + [str(v) for v in (svc.get("env") or {}).values()]
+        for text in texts:
+            for match in REF_RE.finditer(text):
+                if match.group(2) != svc["name"] and (svc["name"], match.group(2)) not in pairs:
+                    pairs.append((svc["name"], match.group(2)))
+    return pairs
 
 
 # ----------------------------------------------------------- dependency setup

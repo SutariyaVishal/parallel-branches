@@ -22,6 +22,18 @@ For each branch it creates a git worktree, copies or installs dependencies, pick
 5. **Check later.** `PB status` lists branches, health and dev browsers. `PB status --json` is for parsing.
 6. **Finish.** Ask before `PB down <branch>` or `PB down --all`. Ask again, separately, before `PB clean --yes`. Plain `PB clean` is a dry run and is safe.
 
+## Branches with several services
+
+Some branches need more than one process, such as a web front end plus an API. The repository describes them in `.parallel-branches.json` under `services`; see `references/stacks.md`. Then:
+
+- `PB up --dry-run` lists every service with its own port and the exact command, in start order. Show all of them.
+- A service starts only after the services it `depends_on` answer. If one fails, the ones already started are stopped again.
+- `{url.NAME}` and `{ports.NAME}` in a command or env value become the other service's address, so the web app can find its API.
+- The primary service (marked `primary`, otherwise the last listed) is the one whose URL you give the user. Mention the others too.
+- `PB status` shows one row per service, as `branch:service`. `PB down` stops all of them.
+- A service that calls another one on a different port is a CORS risk. Treat the `cross-service` warning the same way as any other CORS risk and offer `PB browser`.
+- Passing `--cmd` ignores `services` and runs that single command.
+
 ## Commands
 
 | Command | Purpose |

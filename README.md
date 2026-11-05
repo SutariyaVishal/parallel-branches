@@ -1,6 +1,6 @@
 # parallel-branches
 
-> **Status: early development (v0.3.0).** Core commands, stack detection, dependency handling and the dev-mode browser work and are tested on macOS. Windows is untested. The repository is private for now. See [PLAN.md](PLAN.md) for the design.
+> **Status: early development (v0.4.0).** Core commands, stack detection, dependency handling and the dev-mode browser work and are tested on macOS. Windows is untested. The repository is private for now. See [PLAN.md](PLAN.md) for the design.
 
 An agent skill that lets you work on several git branches at the same time and run each branch's dev server side by side, so you can compare them in the browser.
 
@@ -15,7 +15,7 @@ You have two tasks, each on its own branch. You cannot run both branches at once
 - Create a git worktree per branch.
 - Install or share dependencies.
 - Allocate a free port per branch (and a second one for HMR when needed).
-- Start each dev server detached, health-check it and print the URLs.
+- Start each dev server detached, health-check it and print the URLs. A branch can have several services (an API and a web app, say), each with its own port and a way to find the others.
 - Open a throwaway dev-mode browser profile with web security off when CORS is a risk (localhost only).
 - Show status, stop only the processes it started, and clean up safely.
 

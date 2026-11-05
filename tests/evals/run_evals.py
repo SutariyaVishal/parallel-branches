@@ -74,6 +74,8 @@ def collect_state(repo):
     branches = {}
     for row in rows:
         row["http_ok"] = row["live"] in ("healthy", "unhealthy") and graders.http_ok(row["port"])
+        for extra in row.get("extras") or []:
+            extra["http_ok"] = extra["live"] in ("healthy", "unhealthy") and graders.http_ok(extra["port"])
         branches[row["branch"]] = row
     dirty = fixtures.git(repo, "status", "--porcelain", "--untracked-files=no").strip()
     return {"branches": branches, "repo_clean": not dirty}

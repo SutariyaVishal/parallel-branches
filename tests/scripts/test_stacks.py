@@ -262,6 +262,54 @@ class RiskScanTests(TmpCase):
         self.assertFalse(stacks.scan_risks(self.dir, set())["cors_risk"])
 
 
+class ServicesTests(unittest.TestCase):
+    def svc(self, name, **extra):
+        return dict({"name": name, "cmd": "run"}, **extra)
+
+    def test_no_services_key_means_single_service(self):
+        self.assertIsNone(stacks.parse_services({"cmd": "x"}))
+
+    def test_start_order_follows_depends_on_and_primary_defaults_to_last(self):
+        order, primary = stacks.parse_services({"services": [
+            self.svc("web", depends_on=["api"]), self.svc("api", depends_on=["db"]), self.svc("db")]})
+        self.assertEqual([s["name"] for s in order], ["db", "api", "web"])
+        self.assertEqual(primary, "db")  # last in the list, not last started
+
+    def test_explicit_primary(self):
+        _, primary = stacks.parse_services({"services": [self.svc("api", primary=True), self.svc("web")]})
+        self.assertEqual(primary, "api")
+
+    def test_invalid_configs_are_rejected_with_a_reason(self):
+        cases = {
+            "non-empty list": {"services": []},
+            "must be an object": {"services": ["api"]},
+            "unknown key": {"services": [self.svc("api", port=1)]},
+            "lowercase": {"services": [self.svc("API")]},
+            "duplicate": {"services": [self.svc("a"), self.svc("a")]},
+            "relative path inside": {"services": [self.svc("a", cwd="../x")]},
+            "relative path inside ": {"services": [self.svc("a", cwd="/abs")]},
+            "http": {"services": [self.svc("a", health="udp")]},
+            "unknown service": {"services": [self.svc("a", depends_on=["zzz"])]},
+            "cycle": {"services": [self.svc("a", depends_on=["b"]), self.svc("b", depends_on=["a"])]},
+            "refers to unknown": {"services": [self.svc("a", cmd="x {url.nope}")]},
+            "only one service can be primary": {"services": [self.svc("a", primary=True), self.svc("b", primary=True)]},
+        }
+        for fragment, cfg in cases.items():
+            with self.assertRaises(ValueError, msg=fragment) as ctx:
+                stacks.parse_services(cfg)
+            self.assertIn(fragment.strip(), str(ctx.exception))
+
+    def test_render_fills_other_services_ports_and_urls(self):
+        ports = {"api": (4100, 4101), "web": (4200, 4201)}
+        text = stacks.render("{PORT} {ports.api} {url.api} {url.web}", 4200, 4201, "/tmp", ports)
+        self.assertEqual(text, "4200 4100 http://localhost:4100 http://localhost:4200")
+
+    def test_cross_service_refs_ignores_self_references(self):
+        pairs = stacks.cross_service_refs([
+            self.svc("web", env={"API": "{url.api}"}), self.svc("api", cmd="serve {ports.api}")])
+        self.assertEqual(pairs, [("web", "api")])
+
+
 class ConfigTests(TmpCase):
     def test_first_config_wins_and_bad_json_is_ignored(self):
         other = os.path.join(self.dir, "other")

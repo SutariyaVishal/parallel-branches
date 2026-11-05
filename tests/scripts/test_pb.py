@@ -92,6 +92,13 @@ class UnitTests(unittest.TestCase):
             pb.save_state(tmp, {"version": 1, "branches": {"x": {"port": 4001}}})
             self.assertEqual(pb.load_state(tmp)["branches"]["x"]["port"], 4001)
 
+    def test_stop_group_stops_a_child_of_this_process_without_waiting_or_crashing(self):
+        proc = subprocess.Popen("sleep 60", shell=True, start_new_session=True)  # we are its parent
+        started = __import__("time").time()
+        self.assertTrue(pb.stop_group(proc.pid))
+        self.assertLess(__import__("time").time() - started, 5)
+        self.assertFalse(pb.group_alive(proc.pid))
+
     def test_render_command(self):
         self.assertEqual(pb.render_command("dev -p {PORT} --hmr {HMR_PORT}", 4001, 4002),
                          "dev -p 4001 --hmr 4002")
@@ -157,6 +164,15 @@ class CliTests(PbCase):
         self.assertEqual(proc.returncode, 1)
         self.assertIn("boom", rows[0]["note"])
         self.assertIn("exited with code 3", rows[0]["note"])
+        self.assertEqual(json.loads(self.pb("status", "--json").stdout)[0]["live"], "failed")
+
+    def test_server_that_never_answers_times_out_cleanly(self):
+        started = __import__("time").time()
+        proc = self.pb("up", "feat-a", "--cmd", "sleep 60", "--worktree-dir", self.wt, "--timeout", "2", "--json")
+        rows = json.loads(proc.stdout)
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertIn("timed out", rows[0]["note"])
+        self.assertLess(__import__("time").time() - started, 25)
         self.assertEqual(json.loads(self.pb("status", "--json").stdout)[0]["live"], "failed")
 
     def test_up_twice_is_idempotent(self):
@@ -320,6 +336,141 @@ class DetectionCliTests(PbCase):
         self.assertEqual(proc.returncode, 0)
         self.assertEqual(json.loads(proc.stdout)["stack"]["name"], "node")
         self.assertEqual(self.pb("detect", os.path.join(self.tmp)).returncode, 1)
+
+
+HTTP = "python3 -m http.server {PORT} --bind 127.0.0.1"
+# Fails unless the api answers first, so a pass proves dependency order and the {url.api} template.
+WEB = ("python3 -c \"import urllib.request; urllib.request.urlopen('{url.api}/', timeout=2)\" "
+       "&& echo {url.api} > api_url.txt && exec python3 -m http.server {PORT} --bind 127.0.0.1")
+TCP_ONLY = ("python3 -c \"import socket,time; s=socket.socket(); "
+            "s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); "
+            "s.bind(('127.0.0.1',{PORT})); s.listen(5); time.sleep(120)\"")
+
+
+class MultiServiceTests(PbCase):
+    def configure(self, services, **top):
+        cfg = dict({"services": services}, **top)
+        path = os.path.join(self.repo, ".parallel-branches.json")
+        with open(path, "w") as fh:
+            json.dump(cfg, fh)
+        self.git("add", ".parallel-branches.json")
+        self.git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "services")
+        self.git("branch", "dev-a")
+
+    def standard(self, **web):
+        self.configure([{"name": "api", "cmd": HTTP, "install": False},
+                        dict({"name": "web", "cmd": WEB, "env": {"API_URL": "{url.api}"},
+                              "depends_on": ["api"], "install": False}, **web)])
+
+    def test_services_start_in_dependency_order_and_share_urls(self):
+        self.standard()
+        proc, rows = self.up("dev-a", cmd=None)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        row = rows[0]
+        self.assertEqual(row["service"], "web")  # last in the list is primary
+        api = row["extras"][0]
+        self.assertEqual(api["service"], "api")
+        self.assertNotEqual(api["port"], row["port"])
+        self.assertTrue(http_ok(row["port"]) and http_ok(api["port"]))
+        with open(os.path.join(row["path"], "api_url.txt")) as fh:
+            self.assertEqual(fh.read().strip(), "http://localhost:%d" % api["port"])
+        status = json.loads(self.pb("status", "--json").stdout)[0]
+        self.assertEqual((status["live"], status["extras"][0]["live"]), ("healthy", "healthy"))
+        table = self.pb("status").stdout
+        self.assertIn("dev-a:web", table)
+        self.assertIn("dev-a:api", table)
+
+    def test_plain_text_output_lists_every_service(self):
+        self.standard()
+        dry = self.pb("up", "dev-a", "--worktree-dir", self.wt, "--dry-run")
+        self.assertRegex(dry.stdout, r"dev-a: service api on port \d+")
+        self.assertRegex(dry.stdout, r"dev-a: service web on port \d+")
+        proc = self.pb("up", "dev-a", "--worktree-dir", self.wt, "--timeout", "20")
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertRegex(proc.stdout, r"dev-a: service api http://localhost:\d+")
+        self.assertIn("CORS risk found", proc.stdout)
+
+    def test_primary_flag_picks_the_reported_url(self):
+        self.configure([{"name": "api", "cmd": HTTP, "install": False, "primary": True},
+                        {"name": "web", "cmd": HTTP, "install": False}])
+        _, rows = self.up("dev-a", cmd=None)
+        self.assertEqual(rows[0]["service"], "api")
+        self.assertEqual(rows[0]["extras"][0]["service"], "web")
+
+    def test_down_and_clean_handle_every_service(self):
+        self.standard()
+        _, rows = self.up("dev-a", cmd=None)
+        ports = [rows[0]["port"], rows[0]["extras"][0]["port"]]
+        self.assertIn("still running", self.pb("clean", "--yes").stdout)
+        out = self.pb("down", "dev-a").stdout
+        self.assertIn("dev-a:web: stopped", out)
+        self.assertIn("dev-a:api: stopped", out)
+        self.assertTrue(all(pb.port_is_free(p) for p in ports))
+        self.assertFalse(any(http_ok(p) for p in ports))
+
+    def test_a_failing_service_stops_the_ones_already_started(self):
+        self.configure([{"name": "api", "cmd": HTTP, "install": False},
+                        {"name": "web", "cmd": "echo boom >&2; exit 3", "depends_on": ["api"], "install": False}])
+        proc, rows = self.up("dev-a", cmd=None)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("service web", rows[0]["note"])
+        self.assertIn("boom", rows[0]["note"])
+        self.assertTrue(pb.port_is_free(rows[0]["extras"][0]["port"]))
+        self.assertEqual(json.loads(self.pb("status", "--json").stdout)[0]["live"], "failed")
+
+    def test_dry_run_shows_every_service_with_ports_and_rendered_commands(self):
+        self.standard()
+        proc, rows = self.up("dev-a", cmd=None, extra=("--dry-run",))
+        self.assertEqual(proc.returncode, 0)
+        services = {s["service"]: s for s in rows[0]["services"]}
+        self.assertEqual(list(services), ["api", "web"])  # start order
+        self.assertIn("http://localhost:%d" % services["api"]["port"], services["web"]["cmd"])
+        self.assertFalse(os.path.exists(self.wt))
+        self.assertTrue(pb.port_is_free(services["api"]["port"]))
+
+    def test_bad_services_config_is_reported(self):
+        self.configure([{"name": "a", "cmd": "x", "depends_on": ["b"]}, {"name": "b", "cmd": "x", "depends_on": ["a"]}])
+        proc, _ = self.up("dev-a", cmd=None)
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("bad services", proc.stderr)
+        self.assertIn("cycle", proc.stderr)
+
+    def test_cross_service_call_raises_cors_risk(self):
+        self.standard()
+        _, rows = self.up("dev-a", cmd=None)
+        self.assertTrue(rows[0]["cors_risk"])
+        self.assertIn("cross-service", [w["kind"] for w in rows[0]["warnings"]])
+        self.assertIn("web calls api", self.pb("status", "--json").stdout)
+
+    def test_cmd_flag_overrides_services(self):
+        self.standard()
+        _, rows = self.up("dev-a", cmd=HTTP)
+        self.assertEqual(rows[0]["extras"], [])
+        self.assertTrue(http_ok(rows[0]["port"]))
+
+    def test_up_restarts_everything_when_only_one_service_survived(self):
+        self.standard()
+        _, rows = self.up("dev-a", cmd=None)
+        api_pgid = rows[0]["extras"][0]["pgid"]
+        os.killpg(api_pgid, 15)  # our own test server; simulates a crashed service
+        deadline = __import__("time").time() + 5
+        while pb.group_alive(api_pgid) and __import__("time").time() < deadline:
+            __import__("time").sleep(0.1)
+        _, again = self.up("dev-a", cmd=None)
+        self.assertNotEqual(again[0].get("note"), "already running")
+        self.assertTrue(http_ok(again[0]["port"]) and http_ok(again[0]["extras"][0]["port"]))
+
+    def test_tcp_health_for_services_that_do_not_speak_http(self):
+        self.configure([{"name": "queue", "cmd": TCP_ONLY, "health": "tcp", "install": False},
+                        {"name": "web", "cmd": HTTP, "install": False}])
+        proc, rows = self.up("dev-a", cmd=None)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertEqual(json.loads(self.pb("status", "--json").stdout)[0]["extras"][0]["live"], "healthy")
+
+    def test_detect_reports_start_order(self):
+        self.standard()
+        info = json.loads(self.pb("detect").stdout or self.pb("detect").stderr or "{}")
+        self.assertEqual(info["services"], {"start_order": ["api", "web"], "primary": "web"})
 
 
 class BrowserArgsTests(unittest.TestCase):

@@ -1,13 +1,13 @@
 ---
 name: parallel-branches
-description: Runs several git branches side by side, each in its own worktree with its own dev server and port, so they can be compared in the browser. Use when the user wants to work on multiple tasks or branches at once, run different branches at the same time, check two branches in a browser together, or open a CORS-free dev browser for a locally running app.
+description: Runs several git branches side by side, each in its own worktree with its own dev server and port, so they can be compared in the browser. Use when the user wants to work on multiple tasks or branches at once, run different branches at the same time, check two branches in a browser together, open a CORS-free dev browser for a locally running app, or stop and clean up the servers and worktrees it started.
 license: MIT
 compatibility: Requires git and python3 (3.9 or newer). Chrome or Chromium is needed only for the dev-mode browser. macOS and Linux are tested; Windows is not.
 ---
 
 # parallel-branches
 
-One script, `scripts/pb.py`, manages everything. It uses only the Python standard library. In the examples below, `PB` stands for `python3 <this skill's directory>/scripts/pb.py`, run from inside the user's repository.
+One script, `scripts/pb.py`, manages everything. It uses only the Python standard library. In the examples below, `PB` is shorthand for `python3 <this skill's directory>/scripts/pb.py`. When you run it, write the full path out in every command and do not put it in a shell variable: approval rules match the literal command text, so `python3 /full/path/pb.py up ...` can be pre-approved and `python3 $PB up ...` cannot. Run it from inside the user's repository, or pass `--repo <path>`.
 
 ## What it does
 
@@ -15,7 +15,7 @@ For each branch it creates a git worktree, copies or installs dependencies, pick
 
 ## Workflow
 
-1. **Plan first.** Run `PB up <branch> [<branch>...] --dry-run --json`. It shows, per branch, the detected stack, the exact start command, the install plan and the port. Show these to the user, and say that a repository can supply its own commands through `.parallel-branches.json`, so the commands deserve a read. Ask once before continuing.
+1. **Plan first, then stop and ask.** Run `PB up <branch> [<branch>...] --dry-run --json`. It shows, per branch, the detected stack, the exact start command, the install plan and the port. Show these to the user, and say that a repository can supply its own commands through `.parallel-branches.json`, so the commands deserve a read. Then end your turn with the question. Do not run `PB up` without `--dry-run` in the same turn. A request like "get these running" is not approval of the commands; only a reply to your plan, or a message that explicitly says to go ahead with whatever plan you propose, is.
 2. **Start.** Run `PB up <branch> [<branch>...]`. Add `--cmd '<command with {PORT}>'` when detection found nothing or the user wants a specific command. Add `--create` only if the user wants a new branch made from HEAD.
 3. **Report.** Give the user one URL per branch. Quote any `WARNING` lines. Say how many servers are running; more than three or four will strain a laptop.
 4. **CORS.** If the output says `CORS risk found`, or the user reports CORS errors, run `PB browser <branch>`. It opens a throwaway Chrome profile with web security off. Tell the user that web security is off in that window and that it only opens the app's own localhost URL.
@@ -45,6 +45,7 @@ For each branch it creates a git worktree, copies or installs dependencies, pick
 
 ## Rules
 
+- Never start servers (`PB up` without `--dry-run`) before the user has approved the plan you showed. The commands come from the repository and run in a shell on their machine.
 - Never kill a process this tool did not start. `down` checks a recorded start time before killing, and refuses if the PID was reused.
 - Never open the user's real browser profile with web security off. Only `PB browser` does this, and it always uses an empty throwaway profile.
 - Do not use `clean --force` without telling the user it removes uncommitted work.

@@ -42,7 +42,7 @@ def allowed_tools(root):
     arbitrary code, reach the network or read files outside the throwaway directory. Absolute
     paths in permission rules start with `//`.
     """
-    tools = ["Bash(python3 %s *)" % fixtures.PB]
+    tools = ["Bash(python3 %s *)" % fixtures.PB, "Bash(ls*)", "Bash(pwd)", "Bash(echo *)"]
     tools += ["Bash(git %s*)" % sub for sub in READ_ONLY_GIT]
     scope = "/%s/**" % root  # root is absolute, so this yields the `//abs/path/**` form
     tools += ["Read(%s)" % scope, "Grep(%s)" % scope, "Glob(%s)" % scope]
@@ -89,7 +89,24 @@ def claude_command(args, model, prompt, root="/<tmp>"):
     return cmd
 
 
-def run_one(args, scenario, model, out_dir):
+def transcript_facts(lines):
+    """(skill_invoked, cost_usd) from a stream-json transcript."""
+    skill, cost = False, None
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if event.get("type") == "result":
+            cost = event.get("total_cost_usd")
+        message = event.get("message") if isinstance(event.get("message"), dict) else {}
+        for block in message.get("content") or []:
+            if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") == "Skill":
+                skill = True
+    return skill, cost
+
+
+def run_one(args, scenario, model, out_dir, index=0):
     root = tempfile.mkdtemp(prefix="pb-eval-")
     try:
         repo = prepare(scenario, root)
@@ -101,11 +118,14 @@ def run_one(args, scenario, model, out_dir):
         state = collect_state(repo)
         run = {"commands": commands, "final_text": final_text, "state": state}
         results = graders.grade(run, scenario["checks"])
+        skill_invoked, cost = transcript_facts(proc.stdout.splitlines())
         record = {"scenario": scenario["id"], "model": model, "baseline": args.baseline,
+                  "skill_invoked": skill_invoked, "cost_usd": cost,
                   "seconds": round(time.time() - started, 1), "exit_code": proc.returncode,
                   "commands": commands, "final_text": final_text, "results": results,
                   "stderr_tail": proc.stderr[-500:]}
-        name = "%s__%s%s" % (scenario["id"], model, "__baseline" if args.baseline else "")
+        name = "%s__%s%s%s" % (scenario["id"], model, "__baseline" if args.baseline else "",
+                               "__r%d" % index if args.repeat > 1 else "")
         with open(os.path.join(out_dir, name + ".json"), "w") as fh:
             json.dump(record, fh, indent=2)
         with open(os.path.join(out_dir, name + ".transcript.jsonl"), "w") as fh:
@@ -125,6 +145,7 @@ def main():
     parser.add_argument("--baseline", action="store_true", help="run without the skill")
     parser.add_argument("--max-budget-usd", type=float, default=2.0, help="cap per run (default 2.0)")
     parser.add_argument("--timeout", type=int, default=900, help="seconds per run")
+    parser.add_argument("--repeat", type=int, default=1, help="runs per scenario and model, to measure variance")
     parser.add_argument("--out", default=os.path.join(tempfile.gettempdir(), "pb-evals"))
     parser.add_argument("--dry-run", action="store_true", help="print the runs and commands, call nothing")
     parser.add_argument("--yes", action="store_true", help="confirm that real model calls may spend money")
@@ -135,12 +156,12 @@ def main():
         wanted = set(args.scenarios.split(","))
         scenarios = [s for s in scenarios if s["id"] in wanted]
     models = [m for m in args.models.split(",") if m]
-    runs = [(s, m) for s in scenarios for m in models]
+    runs = [(s, m, i) for s in scenarios for m in models for i in range(args.repeat)]
     suffix = ", baseline (no skill)" if args.baseline else ""
     print("%d run(s), up to $%.2f each (cap $%.2f total)%s"
           % (len(runs), args.max_budget_usd, len(runs) * args.max_budget_usd, suffix))
     if args.dry_run or not args.yes:
-        for scenario, model in runs:
+        for scenario, model, _ in runs:
             print("\n[%s / %s]\n  %s" % (scenario["id"], model, " ".join(
                 json.dumps(p) if " " in p else p for p in claude_command(args, model, scenario["prompt"]))))
         if not args.dry_run:
@@ -151,19 +172,24 @@ def main():
         return 2
     os.makedirs(args.out, exist_ok=True)
     table, failed = [], False
-    for scenario, model in runs:
+    for scenario, model, index in runs:
         print("running %s / %s ..." % (scenario["id"], model), flush=True)
-        record = run_one(args, scenario, model, args.out)
+        record = run_one(args, scenario, model, args.out, index)
         passed = sum(r["passed"] for r in record["results"])
         total = len(record["results"])
         failed = failed or passed != total
-        table.append((scenario["id"], model, "%d/%d" % (passed, total), record.get("error", "")))
+        cost = record.get("cost_usd")
+        table.append((scenario["id"], model, "%d/%d" % (passed, total),
+                      "yes" if record.get("skill_invoked") else "NO",
+                      "$%.2f" % cost if cost is not None else "-", record.get("error", "")))
         for r in record["results"]:
             if not r["passed"]:
                 print("   FAIL %-24s %s" % (r["check"], r["detail"]))
-    print("\n%-16s %-8s %-6s" % ("SCENARIO", "MODEL", "PASSED"))
+    print("\n%-16s %-8s %-8s %-7s %-7s" % ("SCENARIO", "MODEL", "PASSED", "SKILL", "COST"))
     for row in table:
-        print("%-16s %-8s %-6s %s" % row)
+        print("%-16s %-8s %-8s %-7s %-7s %s" % row)
+    spent = sum(float(row[4][1:]) for row in table if row[4] != "-")
+    print("total cost: $%.2f" % spent)
     print("\nrecords in %s" % args.out)
     return 1 if failed else 0
 

@@ -116,3 +116,17 @@ Still open: multi-service setups (one branch needing a host plus remotes started
 Added: `tests/validate_skill.py` (Agent Skills rules and manifest checks), four eval scenarios with deterministic graders (`tests/evals/`), a runner for the Claude Code CLI that refuses to spend money without `--yes`, scripted-agent tests proving every scenario is satisfiable and that careless agents fail, a GitHub Actions workflow (Ubuntu and macOS, Python 3.9 and 3.12, plus ruff and shellcheck), `PB_CHROME_ARGS`, CONTRIBUTING, CHANGELOG and AGENTS.md. 81 tests.
 
 Not done: running the evals against Haiku, Sonnet and Opus (needs approval to spend money), the `stream-json` transcript shape is assumed from docs and unconfirmed against a real transcript, and CI has not run yet on hosted runners.
+
+## Eval results (real models)
+Run with `tests/evals/run_evals.py` against Haiku, Sonnet and Opus (model aliases as of 2026-11-06), four scenarios, each agent limited to this repo's `pb.py`, read-only git, `ls`/`pwd`/`echo` and reads inside a temp directory. About $1.15 per full pass of 12 runs.
+
+| Run | Result | What it taught |
+|---|---|---|
+| 1 | 8 of 12 perfect | Four failures were my allowlist denying `PB=...; python3 $PB` and read-only discovery commands. Agents did not try to route around the denial. |
+| 2 (after fixes) | 10 of 12 | One real failure: Haiku started servers without approval. One grader miss (Opus left a dirty worktree and explained it in words my regex did not know). |
+| approval wording, measured | Haiku skipped approval in about 2 of 7 runs before, 0 of 10 after | Stronger rule in `SKILL.md`. Sonnet and Opus never skipped it. |
+| 3 (final skill text) | 12 of 12 perfect, $1.17 | |
+
+Skill changes the evals drove: use the literal `pb.py` path instead of a shell variable (approval rules match literal text), mention stopping and cleaning up in the description (Sonnet did not load the skill for a teardown request), and make the approval rule explicit.
+
+Caveats: small samples (one run per cell, ten for the Haiku approval check); the graders were adjusted twice after reading agent output, so the final pass rate partly reflects grader tuning; no no-skill baseline (under the narrow allowlist it would mostly measure denials); the agent runs inside the user's own account, not a sandbox.

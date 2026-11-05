@@ -119,6 +119,13 @@ class AllowlistTests(unittest.TestCase):
         self.assertIn("Read(//tmp/pb-eval-x/**)", tools)
         self.assertNotIn("Read", [t for t in tools if "(" not in t])  # no unscoped Read
 
+    def test_transcript_facts_reads_skill_use_and_cost(self):
+        lines = [json.dumps({"type": "assistant", "message": {"content": [
+                    {"type": "tool_use", "name": "Skill", "input": {"skill": "parallel-branches"}}]}}),
+                 json.dumps({"type": "result", "total_cost_usd": 0.25, "result": "ok"})]
+        self.assertEqual(run_evals.transcript_facts(lines), (True, 0.25))
+        self.assertEqual(run_evals.transcript_facts(["junk"]), (False, None))
+
     def test_git_rules_are_read_only(self):
         git_rules = [t for t in run_evals.allowed_tools("/x") if t.startswith("Bash(git")]
         for rule in git_rules:

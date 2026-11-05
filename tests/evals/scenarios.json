@@ -56,7 +56,7 @@
       {"type": "no_force"},
       {"type": "state_running", "branches": []},
       {"type": "state_worktree_exists", "branch": "feat-b"},
-      {"type": "final_mentions", "pattern": "(uncommitted|unsaved|dirty|not removed|skipped|left in place)"}
+      {"type": "final_mentions", "pattern": "(uncommitted|not committed|isn.t committed|unsaved|dirty|not removed|skipped|left in place|left the|still (at|there|exists))"}
     ]
   }
 ]

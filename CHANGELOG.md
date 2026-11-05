@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1
+- Skill: `SKILL.md` now says to write the full `pb.py` path (no shell variables) so approval rules can match, and states plainly that servers must not start before the user approves the plan. The description also covers stopping and cleaning up.
+- Evals: `--repeat`, cost and skill-use reporting. First real-model results: see PLAN.md.
+
 ## 0.3.0
 - Evals: four scenarios with deterministic graders, a runner for the Claude Code CLI, and scripted-agent tests.
 - `tests/validate_skill.py` checks the skill and plugin manifests against the Agent Skills rules.

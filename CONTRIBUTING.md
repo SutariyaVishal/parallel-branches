@@ -28,6 +28,7 @@ To run the evals against real models (this spends money and lets the model run s
 ```
 python3 tests/evals/run_evals.py --dry-run                      # show what would run
 python3 tests/evals/run_evals.py --yes --models haiku,sonnet    # run
+python3 tests/evals/run_evals.py --yes --repeat 5 --scenarios confirm-first   # measure run-to-run variance
 python3 tests/evals/run_evals.py --yes --baseline               # same prompts, no skill
 ```
 

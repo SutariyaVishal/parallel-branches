@@ -169,6 +169,123 @@ def detect_stack(path):
     return best
 
 
+# ------------------------------------------------------- monorepo detection
+
+BACKEND_WORDS = ("api", "backend", "server", "service", "worker", "gateway", "db")
+FRONTEND_WORDS = ("web", "frontend", "client", "ui", "app", "site", "portal", "dashboard")
+LAYOUT_DIRS = ("apps", "services", "packages")
+MAX_SERVICES = 8
+
+
+def workspace_patterns(path):
+    """Workspace globs declared at the repo root: npm/yarn `workspaces`, pnpm-workspace.yaml, lerna.json."""
+    patterns = []
+    workspaces = read_json(os.path.join(path, "package.json")).get("workspaces")
+    if isinstance(workspaces, dict):
+        workspaces = workspaces.get("packages")
+    if isinstance(workspaces, list):
+        patterns += [p for p in workspaces if isinstance(p, str)]
+    lerna = read_json(os.path.join(path, "lerna.json")).get("packages")
+    if isinstance(lerna, list):
+        patterns += [p for p in lerna if isinstance(p, str)]
+    inside = False  # pnpm-workspace.yaml: a `packages:` key followed by `- glob` lines
+    for line in read_text(os.path.join(path, "pnpm-workspace.yaml")).splitlines():
+        if re.match(r"^packages\s*:", line):
+            inside = True
+        elif inside and re.match(r"^\S", line):
+            inside = False
+        elif inside:
+            match = re.match(r"^\s*-\s*['\"]?([^'\"#]+?)['\"]?\s*(#.*)?$", line)
+            if match:
+                patterns.append(match.group(1))
+    return patterns
+
+
+def workspace_dirs(path):
+    included, excluded = [], set()
+    for pattern in workspace_patterns(path):
+        negate = pattern.startswith("!")
+        for found in glob.glob(os.path.join(path, pattern.lstrip("!")), recursive=True):
+            if os.path.isdir(found) and "node_modules" not in found.split(os.sep):
+                (excluded.add if negate else included.append)(os.path.normpath(found))
+    return sorted(set(d for d in included if d not in excluded))
+
+
+def layout_dirs(path):
+    """Sub-directories that may hold an app: top-level folders, plus the children of apps/ and services/."""
+    dirs = []
+    for name in sorted(os.listdir(path)):
+        full = os.path.join(path, name)
+        if not os.path.isdir(full) or name.startswith(".") or name in SKIP_DIRS:
+            continue
+        if name in LAYOUT_DIRS:
+            dirs += [os.path.join(full, sub) for sub in sorted(os.listdir(full))
+                     if os.path.isdir(os.path.join(full, sub)) and sub not in SKIP_DIRS and not sub.startswith(".")]
+        else:
+            dirs.append(full)
+    return dirs
+
+
+def service_name(directory, taken):
+    base = re.sub(r"[^a-z0-9-]+", "-", os.path.basename(directory).lower()).strip("-") or "app"
+    base = base[:28]
+    name, number = base, 2
+    while name in taken:
+        name, number = "%s-%d" % (base, number), number + 1
+    return name
+
+
+def role(name):
+    if any(word in name for word in BACKEND_WORDS):
+        return 0
+    if any(word in name for word in FRONTEND_WORDS):
+        return 2
+    return 1
+
+
+def detect_services(path):
+    """Suggest a `services` config for a monorepo. Returns None, or {"services": [...], "notes": [...]}.
+
+    This only reads the repository. Nothing is started or written.
+    """
+    workspaces = workspace_dirs(path)
+    root_stack = detect_stack(path)
+    candidates = []
+    for directory in (workspaces or layout_dirs(path)):
+        if os.path.realpath(directory) == os.path.realpath(path):
+            continue
+        stack = detect_stack(directory)
+        if stack:
+            candidates.append((directory, stack))
+    if not candidates or (root_stack and not workspaces and len(candidates) < 2):
+        return None
+    notes = []
+    if root_stack and workspaces:
+        notes.append("the root %s script (%s) may already start every app; check it before using services"
+                     % (root_stack["name"], root_stack["cmd"]))
+    if len(candidates) > MAX_SERVICES:
+        notes.append("%d apps found, only the first %d are listed" % (len(candidates), MAX_SERVICES))
+        candidates = candidates[:MAX_SERVICES]
+    taken, services = set(), []
+    for directory, stack in candidates:
+        name = service_name(directory, taken)
+        taken.add(name)
+        services.append({"name": name, "cwd": os.path.relpath(directory, path).replace(os.sep, "/"),
+                         "cmd": stack["cmd"], "_stack": stack["name"], "_confidence": stack["confidence"]})
+        if stack["confidence"] == "low":
+            notes.append("%s: %s" % (name, stack["note"]))
+    services.sort(key=lambda svc: role(svc["name"]))  # backends first, front ends last (primary)
+    notes.append("depends_on and {url.NAME} wiring between the apps are not guessed; "
+                 "add them where one app calls another")
+    return {"services": services, "notes": notes}
+
+
+def suggested_config(suggestion):
+    """The `.parallel-branches.json` content for a detect_services result (without the _hint keys)."""
+    return {"services": [{k: v for k, v in svc.items() if not k.startswith("_")}
+                         for svc in suggestion["services"]]}
+
+
 def python_for(path):
     venv = os.path.join(path, ".venv", "bin", "python")
     if os.name == "nt":

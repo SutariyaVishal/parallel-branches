@@ -33,6 +33,8 @@ Some branches need more than one process, such as a web front end plus an API. T
 - `PB status` shows one row per service, as `branch:service`. `PB down` stops all of them.
 - A service that calls another one on a different port is a CORS risk. Treat the `cross-service` warning the same way as any other CORS risk and offer `PB browser`.
 - Passing `--cmd` ignores `services` and runs that single command.
+- To pick up a code or config change in one service, use `PB restart BRANCH SERVICE`. It keeps the port, so URLs and `{url.NAME}` references stay valid.
+- If `up` says the project looks like a monorepo, run `PB init`, show the user the suggested services and notes, and ask before `PB init --write`. It guesses commands from each app's stack and does not guess `depends_on` or which app calls which, so ask the user about those.
 
 ## Commands
 
@@ -43,7 +45,9 @@ Some branches need more than one process, such as a web front end plus an API. T
 | `PB browser BRANCH [--path /x] [--headless]` | Open a dev-mode browser for a running branch |
 | `PB down BRANCH...` or `--all` | Stop only the processes this tool started, and close their dev browsers |
 | `PB clean [--yes] [--force]` | Remove worktrees this tool created. Dry run without `--yes` |
-| `PB detect [PATH]` | Show the detected stack, config and install plan |
+| `PB restart BRANCH [SERVICE]` | Restart one service, or all of them, on the same ports |
+| `PB init [--write]` | Suggest a `services` config for a monorepo. Printing writes nothing |
+| `PB detect [PATH]` | Show the detected stack, config, install plan and any monorepo suggestion |
 
 `{PORT}` and `{HMR_PORT}` in `--cmd` are replaced, and both are also exported as environment variables. `BROWSER=none` is always set so dev servers do not open a browser by themselves.
 

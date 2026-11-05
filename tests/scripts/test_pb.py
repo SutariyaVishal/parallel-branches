@@ -175,6 +175,46 @@ class CliTests(PbCase):
         self.assertLess(__import__("time").time() - started, 25)
         self.assertEqual(json.loads(self.pb("status", "--json").stdout)[0]["live"], "failed")
 
+    def test_restart_keeps_the_port_and_replaces_the_process(self):
+        _, first = self.up("feat-a")
+        proc = self.pb("restart", "feat-a", "--json")
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        again = json.loads(proc.stdout)[0]
+        self.assertEqual(again["port"], first[0]["port"])
+        self.assertNotEqual(again["pid"], first[0]["pid"])
+        self.assertTrue(http_ok(again["port"]))
+        self.assertEqual(json.loads(self.pb("status", "--json").stdout)[0]["live"], "healthy")
+
+    def test_restart_after_down_starts_it_again(self):
+        _, first = self.up("feat-a")
+        self.pb("down", "feat-a")
+        self.assertFalse(http_ok(first[0]["port"]))
+        self.assertEqual(self.pb("restart", "feat-a").returncode, 0)
+        self.assertTrue(http_ok(first[0]["port"]))
+
+    def test_restart_errors_are_clear(self):
+        proc = self.pb("restart", "feat-a")
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("not registered", proc.stderr)
+        self.up("feat-a")
+        proc = self.pb("restart", "feat-a", "nope")
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("unknown service", proc.stderr)
+
+    def test_restart_reports_a_port_someone_else_took(self):
+        _, first = self.up("feat-a")
+        port = first[0]["port"]
+        self.pb("down", "feat-a")
+        sock = listening_socket(port)
+        try:
+            proc = self.pb("restart", "feat-a")
+            self.assertEqual(proc.returncode, 1)
+            self.assertIn("in use by another process", proc.stdout)
+        finally:
+            sock.close()
+        self.assertEqual(self.pb("restart", "feat-a").returncode, 0)
+        self.assertTrue(http_ok(port))
+
     def test_up_twice_is_idempotent(self):
         _, first = self.up("feat-a")
         _, second = self.up("feat-a")
@@ -428,6 +468,32 @@ class MultiServiceTests(PbCase):
         self.assertFalse(os.path.exists(self.wt))
         self.assertTrue(pb.port_is_free(services["api"]["port"]))
 
+    def test_restart_one_service_leaves_the_others_alone(self):
+        self.standard()
+        _, rows = self.up("dev-a", cmd=None)
+        web, api = rows[0], rows[0]["extras"][0]
+        url_file = os.path.join(web["path"], "api_url.txt")
+        os.remove(url_file)
+        proc = self.pb("restart", "dev-a", "web", "--json")
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        status = json.loads(self.pb("status", "--json").stdout)[0]
+        self.assertNotEqual(status["pid"], web["pid"])
+        self.assertEqual(status["extras"][0]["pid"], api["pid"])  # api untouched
+        self.assertEqual(status["port"], web["port"])
+        self.assertTrue(http_ok(web["port"]) and http_ok(api["port"]))
+        with open(url_file) as fh:  # same command, cwd and env were reused
+            self.assertEqual(fh.read().strip(), "http://localhost:%d" % api["port"])
+
+    def test_restart_all_services_restarts_in_dependency_order(self):
+        self.standard()
+        _, rows = self.up("dev-a", cmd=None)
+        proc = self.pb("restart", "dev-a", "--json")
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        status = json.loads(self.pb("status", "--json").stdout)[0]
+        self.assertNotEqual(status["pid"], rows[0]["pid"])
+        self.assertNotEqual(status["extras"][0]["pid"], rows[0]["extras"][0]["pid"])
+        self.assertEqual((status["live"], status["extras"][0]["live"]), ("healthy", "healthy"))
+
     def test_bad_services_config_is_reported(self):
         self.configure([{"name": "a", "cmd": "x", "depends_on": ["b"]}, {"name": "b", "cmd": "x", "depends_on": ["a"]}])
         proc, _ = self.up("dev-a", cmd=None)
@@ -471,6 +537,60 @@ class MultiServiceTests(PbCase):
         self.standard()
         info = json.loads(self.pb("detect").stdout or self.pb("detect").stderr or "{}")
         self.assertEqual(info["services"], {"start_order": ["api", "web"], "primary": "web"})
+
+
+class MonorepoCliTests(PbCase):
+    SCRIPT = {"scripts": {"dev": "python3 -m http.server $PORT --bind 127.0.0.1"}}
+
+    def monorepo(self):
+        for rel in ("apps/api", "apps/web"):
+            path = os.path.join(self.repo, rel)
+            os.makedirs(path)
+            with open(os.path.join(path, "package.json"), "w") as fh:
+                json.dump(dict(self.SCRIPT, name=rel.split("/")[1]), fh)
+        with open(os.path.join(self.repo, "package.json"), "w") as fh:
+            json.dump({"private": True, "workspaces": ["apps/*"]}, fh)
+        self.git("add", ".")
+        self.git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "monorepo")
+        self.git("branch", "dev-a")
+
+    def test_up_explains_what_to_do_in_a_monorepo(self):
+        self.monorepo()
+        proc, _ = self.up("dev-a", cmd=None)
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("monorepo with 2 apps", proc.stderr)
+        self.assertIn("pb.py init", proc.stderr)
+
+    def test_init_prints_then_writes_and_refuses_to_overwrite(self):
+        self.monorepo()
+        printed = self.pb("init")
+        self.assertEqual(printed.returncode, 0, printed.stderr)
+        self.assertEqual([s["name"] for s in json.loads(printed.stdout)["services"]], ["api", "web"])
+        self.assertFalse(os.path.exists(os.path.join(self.repo, ".parallel-branches.json")))  # printing writes nothing
+        self.assertEqual(self.pb("init", "--write").returncode, 0)
+        self.assertTrue(os.path.exists(os.path.join(self.repo, ".parallel-branches.json")))
+        again = self.pb("init", "--write")
+        self.assertEqual(again.returncode, 2)
+        self.assertIn("already exists", again.stderr)
+        self.assertEqual(self.pb("init", "--write", "--force").returncode, 0)
+
+    def test_init_in_a_plain_repo_says_so(self):
+        proc = self.pb("init")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("No monorepo layout", proc.stderr)
+
+    def test_written_config_runs_both_apps(self):
+        self.monorepo()
+        self.pb("init", "--write")
+        proc, rows = self.up("dev-a", cmd=None, extra=("--no-install",))
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertEqual(rows[0]["service"], "web")
+        self.assertTrue(http_ok(rows[0]["port"]) and http_ok(rows[0]["extras"][0]["port"]))
+
+    def test_detect_reports_the_monorepo_suggestion(self):
+        self.monorepo()
+        info = json.loads(self.pb("detect").stdout)
+        self.assertEqual([s["name"] for s in info["monorepo"]["services"]], ["api", "web"])
 
 
 class BrowserArgsTests(unittest.TestCase):

@@ -310,6 +310,84 @@ class ServicesTests(unittest.TestCase):
         self.assertEqual(pairs, [("web", "api")])
 
 
+class MonorepoTests(TmpCase):
+    def app(self, rel, scripts=None, dev=None):
+        self.write(rel + "/package.json", json.dumps({"name": rel.split("/")[-1], "scripts": scripts or {"dev": "x"},
+                                                      "devDependencies": dev or {}}))
+
+    def test_npm_workspaces_find_apps_and_order_backend_first(self):
+        self.write("package.json", json.dumps({"private": True, "workspaces": ["apps/*", "packages/*"]}))
+        self.app("apps/web", dev={"vite": "5"})
+        self.app("apps/api")
+        self.write("packages/ui/package.json", json.dumps({"name": "ui", "scripts": {"build": "tsc"}}))  # a library
+        found = stacks.detect_services(self.dir)
+        self.assertEqual([s["name"] for s in found["services"]], ["api", "web"])
+        self.assertEqual(found["services"][1]["cwd"], "apps/web")
+        self.assertEqual(found["services"][1]["cmd"], "npm run dev -- --port {PORT} --strictPort")
+        self.assertTrue(any("api:" in n for n in found["notes"]))  # low confidence api is called out
+
+    def test_pnpm_workspace_yaml_with_exclusion_and_lerna(self):
+        self.write("pnpm-workspace.yaml", "packages:\n  - 'apps/*'\n  - '!apps/legacy'\nother: 1\n")
+        for name in ("web", "api", "legacy"):
+            self.app("apps/" + name)
+        names = [s["name"] for s in stacks.detect_services(self.dir)["services"]]
+        self.assertEqual(sorted(names), ["api", "web"])
+        os.remove(os.path.join(self.dir, "pnpm-workspace.yaml"))
+        self.write("lerna.json", json.dumps({"packages": ["apps/web", "apps/api"]}))
+        self.assertEqual(len(stacks.detect_services(self.dir)["services"]), 2)
+
+    def test_conventional_layout_without_workspaces(self):
+        self.app("frontend", dev={"vite": "5"})
+        self.write("backend/manage.py")
+        self.write("docs/readme.md")
+        found = stacks.detect_services(self.dir)
+        self.assertEqual([(s["name"], s["cwd"]) for s in found["services"]],
+                         [("backend", "backend"), ("frontend", "frontend")])
+        self.assertEqual(found["services"][0]["cmd"], "{PY} manage.py runserver 127.0.0.1:{PORT}")
+
+    def test_single_app_repos_are_not_monorepos(self):
+        self.app(".", dev={"vite": "5"})
+        self.assertIsNone(stacks.detect_services(self.dir))
+
+    def test_root_app_with_one_subapp_is_left_alone_but_a_lone_subapp_is_suggested(self):
+        self.app(".", dev={"vite": "5"})
+        self.app("apps/helper")
+        self.assertIsNone(stacks.detect_services(self.dir))
+        os.remove(os.path.join(self.dir, "package.json"))
+        found = stacks.detect_services(self.dir)
+        self.assertEqual([s["name"] for s in found["services"]], ["helper"])
+
+    def test_root_dev_script_in_a_workspace_repo_is_flagged(self):
+        self.write("package.json", json.dumps({"workspaces": ["apps/*"], "scripts": {"dev": "turbo run dev"}}))
+        self.app("apps/web")
+        self.app("apps/api")
+        notes = stacks.detect_services(self.dir)["notes"]
+        self.assertTrue(any("root" in n and "npm run dev" in n for n in notes))
+
+    def test_names_are_sanitized_deduplicated_and_capped(self):
+        self.write("package.json", json.dumps({"workspaces": ["apps/*/web"]}))
+        self.app("apps/a/web")
+        self.app("apps/b/web")
+        names = [s["name"] for s in stacks.detect_services(self.dir)["services"]]
+        self.assertEqual(sorted(names), ["web", "web-2"])
+        self.write("package.json", json.dumps({"workspaces": ["svc/*"]}))
+        for i in range(10):
+            self.app("svc/Svc_%d" % i)
+        found = stacks.detect_services(self.dir)
+        self.assertEqual(len(found["services"]), stacks.MAX_SERVICES)
+        self.assertTrue(any("only the first" in n for n in found["notes"]))
+        self.assertTrue(all(stacks.SERVICE_NAME_RE.match(s["name"]) for s in found["services"]))
+
+    def test_suggested_config_is_valid_and_has_no_hint_keys(self):
+        self.write("package.json", json.dumps({"workspaces": ["apps/*"]}))
+        self.app("apps/web", dev={"vite": "5"})
+        self.app("apps/api")
+        config = stacks.suggested_config(stacks.detect_services(self.dir))
+        self.assertTrue(all(not k.startswith("_") for s in config["services"] for k in s))
+        order, primary = stacks.parse_services(config)
+        self.assertEqual((len(order), primary), (2, "web"))
+
+
 class ConfigTests(TmpCase):
     def test_first_config_wins_and_bad_json_is_ignored(self):
         other = os.path.join(self.dir, "other")

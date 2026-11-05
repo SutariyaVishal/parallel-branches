@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.0
+- `restart BRANCH [SERVICE]`: restart one service or all of them on the same ports.
+- Monorepo detection: `init` suggests a `services` config from workspaces (npm, yarn, pnpm, lerna) or conventional folders, `detect` reports it, and `up` points at `init` instead of failing blindly.
+
 ## 0.4.0
 - Multi-service branches: `services` in `.parallel-branches.json` runs several processes per branch (for example an API and a web app) with their own ports, `depends_on` ordering, `{url.NAME}` and `{ports.NAME}` templating, and `http` or `tcp` health checks. `status` shows one row per service, `down` stops all of them, and a failed start stops the services already started.
 - Fix: stopping a service that this same `pb` run had started crashed on macOS (`EPERM` on a zombie process group) or waited out the full grace period. Own children are now reaped.

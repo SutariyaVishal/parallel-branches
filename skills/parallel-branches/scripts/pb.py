@@ -5,7 +5,7 @@ Each branch gets its own git worktree, its own port and its own detached dev
 server. State lives under the repository's git common dir, so every worktree
 of the repo sees the same registry.
 
-Subcommands: up, status, down, clean, detect, browser.
+Subcommands: up, status, down, clean, restart, init, detect, browser.
 Python 3.9+, standard library only.
 """
 
@@ -407,8 +407,13 @@ def resolve_settings(args, path, main, fresh=False, cfg=None, from_cli=True):
     stack = stacks.detect_stack(path)
     template = (args.cmd if from_cli else None) or cfg.get("cmd") or (stack or {}).get("cmd")
     if not template:
+        found = stacks.detect_services(path)
+        hint = ""
+        if found:
+            hint = ("\nThis looks like a monorepo with %d apps (%s). Run `pb.py init` to see a suggested "
+                    "services config." % (len(found["services"]), ", ".join(x["name"] for x in found["services"])))
         raise PbError("could not work out how to start the project in %s; pass --cmd "
-                      "(or run: pb.py detect)" % path)
+                      "(or run: pb.py detect)%s" % (path, hint))
     env = dict((stack or {}).get("env") or {})
     env.update(cfg.get("env") or {})
     in_main = os.path.realpath(path) == os.path.realpath(main) and not fresh
@@ -565,9 +570,10 @@ def up_one(args, state, state_dir, main, base_dir, branch):
                 save()
                 return dict(entry, note="FAILED%s: %s" % (where, note)), True
         cmd = stacks.render(st["template"], port, hmr, svc_dir, port_map)
+        extra_env = {key: stacks.render(str(value), port, hmr, svc_dir, port_map) for key, value in st["env"].items()}
         env = dict(os.environ, PORT=str(port), HMR_PORT=str(hmr), BROWSER="none")
-        for key, value in st["env"].items():
-            env[key] = stacks.render(str(value), port, hmr, svc_dir, port_map)
+        env.update(extra_env)
+        rec["cwd"], rec["extra_env"] = svc_dir, extra_env
         ok, detail = launch(rec, cmd, svc_dir, env, rec["log"], args.timeout, rec["health_path"],
                             rec["health"], not args.no_verify_owner, save)
         if not ok:
@@ -609,6 +615,61 @@ def cmd_up(args):
                     row["note"] = "%s (browser: %s)" % (row.get("note", ""), exc)
             results.append(row)
             save_state(state_dir, state)
+    print_results(results, args.json)
+    return 1 if failed else 0
+
+
+# -------------------------------------------------------------------- restart
+
+def cmd_restart(args):
+    _, state_dir = repo_info(args.repo)
+    results, failed = [], False
+    with locked(state_dir):
+        state = load_state(state_dir)
+        entry = state["branches"].get(args.branch)
+        if not entry:
+            raise PbError("'%s' is not registered; start it first with: pb.py up %s" % (args.branch, args.branch))
+        by_name = {rec.get("service"): rec for rec in all_records(entry)}
+        order = entry.get("service_order") or [None]
+        if args.service:
+            if args.service not in by_name:
+                names = ", ".join(n for n in order if n) or "(this branch has a single unnamed service)"
+                raise PbError("unknown service %r for '%s'; services: %s" % (args.service, args.branch, names))
+            targets = [args.service]
+        else:
+            targets = order
+        for name in targets:
+            if not by_name[name].get("cmd") or not by_name[name].get("cwd"):
+                raise PbError("'%s' was started by an older version; run `pb.py down %s` and `pb.py up %s`"
+                              % (args.branch, args.branch, args.branch))
+        save = lambda: save_state(state_dir, state)  # noqa: E731
+        for name in reversed(targets):  # dependents first
+            rec = by_name[name]
+            if entry_owns_process(rec):
+                stop_group(rec["pgid"])
+            rec.update(pid=None, pgid=None, token=None, status="stopped")
+        for name in targets:
+            rec = by_name[name]
+            label = args.branch + (":" + name if name else "")
+            row = dict(rec, branch=label, path=rec.get("cwd", entry["path"]))
+            if not port_is_free(rec["port"]):
+                failed = True
+                rec["status"] = "failed"
+                results.append(dict(row, note="FAILED: port %d is in use by another process" % rec["port"]))
+                continue
+            env = dict(os.environ, PORT=str(rec["port"]), HMR_PORT=str(rec["hmr_port"]), BROWSER="none")
+            env.update(rec.get("extra_env") or {})
+            ok, detail = launch(rec, rec["cmd"], rec["cwd"], env, rec["log"], args.timeout,
+                                rec.get("health_path", "/"), rec.get("health", "http"),
+                                not args.no_verify_owner, save)
+            if ok:
+                rec["healthy"] = True
+                results.append(dict(rec, branch=label, path=rec["cwd"], note="restarted: " + detail))
+            else:
+                failed = True
+                results.append(dict(rec, branch=label, path=rec["cwd"],
+                                    note="FAILED: %s\n%s" % (detail, tail(rec["log"]))))
+        save()
     print_results(results, args.json)
     return 1 if failed else 0
 
@@ -687,6 +748,33 @@ def print_browser(branch, info, as_json):
           % info["cdp_port"])
 
 
+def cmd_init(args):
+    """Print, or with --write save, a suggested services config for a monorepo."""
+    main, _ = repo_info(args.repo)
+    found = stacks.detect_services(main)
+    if not found:
+        print("No monorepo layout found in %s. Use --cmd, or write .parallel-branches.json by hand." % main,
+              file=sys.stderr)
+        return 1
+    config = stacks.suggested_config(found)
+    text = json.dumps(config, indent=2) + "\n"
+    target = os.path.join(main, stacks.CONFIG_NAME)
+    print("Suggested %s (detected: %s)" % (stacks.CONFIG_NAME, ", ".join(
+        "%s=%s" % (x["name"], x["_stack"]) for x in found["services"])), file=sys.stderr)
+    for note in found["notes"]:
+        print("  note: " + note, file=sys.stderr)
+    if not args.write:
+        print(text, end="")
+        print("Review it, then run `pb.py init --write` to save it as %s." % target, file=sys.stderr)
+        return 0
+    if os.path.exists(target) and not args.force:
+        raise PbError("%s already exists; use --force to overwrite it" % target)
+    with open(target, "w") as fh:
+        fh.write(text)
+    print("wrote %s" % target)
+    return 0
+
+
 def cmd_detect(args):
     main, _ = repo_info(args.repo)
     path = os.path.abspath(args.path) if args.path else main
@@ -699,7 +787,9 @@ def cmd_detect(args):
             services = {"start_order": [x["name"] for x in parsed[0]], "primary": parsed[1]}
     except ValueError as exc:
         services = {"error": str(exc)}
+    monorepo = stacks.detect_services(path)
     print(json.dumps({"path": path, "stack": stack, "config": config, "services": services,
+                      "monorepo": monorepo,
                       "install": stacks.plan_install(path, main, stack, fresh=True)}, indent=2))
     return 0 if stack else 1
 
@@ -889,6 +979,19 @@ def build_parser():
     up.add_argument("--dry-run", action="store_true", help="show ports and commands, start nothing")
     up.add_argument("--json", action="store_true")
     up.set_defaults(func=cmd_up)
+
+    rs = sub.add_parser("restart", help="restart one service of a branch, or all of them, on the same ports")
+    rs.add_argument("branch")
+    rs.add_argument("service", nargs="?", help="service name (default: every service of the branch)")
+    rs.add_argument("--timeout", type=int, default=60, help="seconds to wait for each server (default 60)")
+    rs.add_argument("--no-verify-owner", action="store_true")
+    rs.add_argument("--json", action="store_true")
+    rs.set_defaults(func=cmd_restart)
+
+    ini = sub.add_parser("init", help="suggest a services config for a monorepo (--write saves it)")
+    ini.add_argument("--write", action="store_true", help="save to .parallel-branches.json in the main checkout")
+    ini.add_argument("--force", action="store_true", help="overwrite an existing config")
+    ini.set_defaults(func=cmd_init)
 
     det = sub.add_parser("detect", help="show how the project would be started and installed")
     det.add_argument("path", nargs="?", help="directory to inspect (default: main checkout)")

@@ -102,3 +102,21 @@ Behavior to know:
 - If only some services of a branch are alive when you run `up`, they are all stopped and restarted.
 - A service that uses `{url.OTHER}` is flagged as a CORS risk, because it calls another origin.
 - `copy` and env-file copying still apply once per branch, from the repository root.
+
+## Monorepos
+
+`PB init` reads the repository and suggests a `services` config. It never starts anything, and it only writes a file with `--write` (and refuses to overwrite one without `--force`). `PB detect` shows the same suggestion under `monorepo`.
+
+It looks at:
+- Workspace globs: `workspaces` in `package.json` (npm, yarn), `pnpm-workspace.yaml` (including `!` exclusions) and `lerna.json`.
+- Without workspaces, top-level folders such as `frontend/` and `backend/`, and the children of `apps/`, `services/` and `packages/`.
+
+A folder becomes a service only if a stack is detected in it (see the table above), so libraries without a `dev`, `start` or `serve` script are skipped. Names come from the folder name. Backend-looking names (`api`, `server`, `backend` and similar) are listed first and front-end-looking names (`web`, `frontend`, `app`) last, which makes the last one primary. At most 8 services are listed.
+
+What it does not guess: `depends_on`, and which app calls which (`{url.NAME}`). Add those by hand. If the root `package.json` already has a `dev` script that starts everything (Turborepo, Nx), the notes say so; that single command may be all you need.
+
+`PB up` in a monorepo with no config stops with an error that points at `PB init` instead of guessing.
+
+## Restarting
+
+`PB restart BRANCH SERVICE` stops one service and starts it again with the same command, directory, environment and port. `PB restart BRANCH` restarts all of them (dependents stop first, and everything starts in dependency order). It fails with a clear message if something else took the port while the service was down.

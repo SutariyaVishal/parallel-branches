@@ -1,6 +1,9 @@
 {
   "name": "parallel-branches",
-  "owner": { "name": "Vishal Sutariya" },
+  "description": "Agent skills for working on several git branches at once.",
+  "owner": {
+    "name": "Vishal Sutariya"
+  },
   "plugins": [
     {
       "name": "parallel-branches",

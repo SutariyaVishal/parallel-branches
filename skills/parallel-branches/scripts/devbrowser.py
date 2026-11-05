@@ -8,6 +8,7 @@ user's real profile, and is opened on a single localhost URL.
 
 import http.client
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -52,6 +53,8 @@ def launch(chrome, profile_dir, cdp_port, url, headless=False):
     ]
     if headless:
         args.append("--headless=new")
+    # Extra flags for sandboxed runners, e.g. PB_CHROME_ARGS=--no-sandbox in CI containers.
+    args.extend(shlex.split(os.environ.get("PB_CHROME_ARGS", "")))
     args.append(url)
     return subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL, start_new_session=True)

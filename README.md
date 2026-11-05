@@ -1,6 +1,6 @@
 # parallel-branches
 
-> **Status: early development (v0.2.0).** Core commands, stack detection, dependency handling and the dev-mode browser work and are tested on macOS. Windows is untested. The repository is private for now. See [PLAN.md](PLAN.md) for the design.
+> **Status: early development (v0.3.0).** Core commands, stack detection, dependency handling and the dev-mode browser work and are tested on macOS. Windows is untested. The repository is private for now. See [PLAN.md](PLAN.md) for the design.
 
 An agent skill that lets you work on several git branches at the same time and run each branch's dev server side by side, so you can compare them in the browser.
 
@@ -56,6 +56,16 @@ python3 skills/parallel-branches/scripts/pb.py clean --yes
 ```
 
 Run the tests with `python3 -m unittest discover tests/scripts`.
+
+## Testing
+
+```
+python3 tests/validate_skill.py
+python3 -m unittest discover tests/scripts
+python3 tests/evals/run_evals.py --dry-run   # evals against real models; needs --yes to spend money
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 MIT. See [LICENSE](LICENSE).

@@ -70,7 +70,7 @@ Install: Claude Code `/plugin marketplace add <owner>/<repo>`; other agents copy
 0. **Done** (see docs/phase0-results.md). Generic validation (no coupling to any one framework or auth provider):** build tiny throwaway sample apps in `tests/fixtures/` (e.g. Vite, Flask, Express, plus one multi-port host+remote pair) and verify per-stack port mechanisms from the research table. Auth/CORS: CORS handled by the dev-mode browser; non-CORS auth failures stay a generic "hardcoded port/redirect" warning, never provider-specific logic. Also verify the dev-mode Chrome flags work on the current Chrome version, and that a Playwright-driven agent can attach (CDP) to it.
 1. `pb.py` core: worktree, ports, detached start/stop, registry, health check, tests. **Done** (see Phase 1 status below).
 2. SKILL.md + references; stack detection for top ~8 stacks. **Done** (see Phase 2 status below).
-3. Evals (3+ scenarios, test on Haiku/Sonnet/Opus) and script tests.
+3. Evals (3+ scenarios, test on Haiku/Sonnet/Opus) and script tests. **Built; real-model runs not done yet** (see Phase 3 status below).
 4. Package (plugin/marketplace, README with demo GIF), license, CI, publish.
 
 ## Pros
@@ -111,3 +111,8 @@ Added: stack detection for 15 stack variants (Node frameworks, Django, Flask, Fa
 Verified by real runs: headed and headless dev-mode Chrome 156 bypasses CORS on a host-plus-remote fixture, an agent attaches over CDP with `playwright-core`, and `down` closes the browser and deletes its profile.
 
 Still open: multi-service setups (one branch needing a host plus remotes started together), a retry when a port is lost in a race, evals, CI, Windows, attaching through Playwright MCP itself, and trying the detection rules on real projects beyond the fixtures.
+
+## Phase 3 status
+Added: `tests/validate_skill.py` (Agent Skills rules and manifest checks), four eval scenarios with deterministic graders (`tests/evals/`), a runner for the Claude Code CLI that refuses to spend money without `--yes`, scripted-agent tests proving every scenario is satisfiable and that careless agents fail, a GitHub Actions workflow (Ubuntu and macOS, Python 3.9 and 3.12, plus ruff and shellcheck), `PB_CHROME_ARGS`, CONTRIBUTING, CHANGELOG and AGENTS.md. 81 tests.
+
+Not done: running the evals against Haiku, Sonnet and Opus (needs approval to spend money), the `stream-json` transcript shape is assumed from docs and unconfirmed against a real transcript, and CI has not run yet on hosted runners.

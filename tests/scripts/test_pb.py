@@ -322,6 +322,35 @@ class DetectionCliTests(PbCase):
         self.assertEqual(self.pb("detect", os.path.join(self.tmp)).returncode, 1)
 
 
+class BrowserArgsTests(unittest.TestCase):
+    def test_extra_chrome_args_come_from_the_environment(self):
+        import devbrowser
+        captured = {}
+
+        class FakePopen:
+            def __init__(self, args, **kwargs):
+                captured["args"] = args
+
+        real = devbrowser.subprocess.Popen
+        devbrowser.subprocess.Popen = FakePopen
+        old = os.environ.get("PB_CHROME_ARGS")
+        os.environ["PB_CHROME_ARGS"] = "--no-sandbox --disable-gpu"
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                devbrowser.launch("chrome", os.path.join(tmp, "p"), 9300, "http://localhost:1/", headless=True)
+        finally:
+            devbrowser.subprocess.Popen = real
+            if old is None:
+                os.environ.pop("PB_CHROME_ARGS")
+            else:
+                os.environ["PB_CHROME_ARGS"] = old
+        args = captured["args"]
+        self.assertIn("--no-sandbox", args)
+        self.assertIn("--disable-web-security", args)
+        self.assertEqual(args[-1], "http://localhost:1/")  # the URL stays last and is the only page opened
+        self.assertTrue(any(a.startswith("--user-data-dir=") for a in args))
+
+
 class BrowserCliTests(PbCase):
     def setUp(self):
         super().setUp()

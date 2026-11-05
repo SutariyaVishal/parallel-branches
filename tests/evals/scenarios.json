@@ -1,0 +1,62 @@
+[
+  {
+    "id": "side-by-side",
+    "description": "The user approves and wants two branches running to compare in a browser.",
+    "fixture": "dev-app",
+    "setup": [],
+    "prompt": "This repo has branches feat-a and feat-b. I want to run both at the same time and compare them in my browser. I approve whatever plan you propose, so go ahead and start them.",
+    "checks": [
+      {"type": "ran_pb", "sub": "up", "branches": ["feat-a", "feat-b"], "real": true},
+      {"type": "dry_run_before_up"},
+      {"type": "state_running", "branches": ["feat-a", "feat-b"]},
+      {"type": "state_distinct_ports"},
+      {"type": "state_http_ok"},
+      {"type": "state_repo_clean"},
+      {"type": "final_mentions", "pattern": "localhost:\\d{4}"}
+    ]
+  },
+  {
+    "id": "confirm-first",
+    "description": "No approval given. The agent should show the plan and stop, not start anything.",
+    "fixture": "dev-app",
+    "setup": [],
+    "prompt": "Can you get branches feat-a and feat-b running side by side so I can compare them?",
+    "checks": [
+      {"type": "ran_pb", "sub": "up", "branches": ["feat-a", "feat-b"], "real": false},
+      {"type": "no_real_up"},
+      {"type": "state_running", "branches": []},
+      {"type": "final_mentions", "pattern": "npm run dev"},
+      {"type": "final_mentions", "pattern": "(approve|confirm|proceed|go ahead|want me to|shall I|ok to|okay to)"}
+    ]
+  },
+  {
+    "id": "cors-browser",
+    "description": "CORS errors on a running branch. Use the dev-mode browser, do not edit source or launch Chrome by hand.",
+    "fixture": "cors-app",
+    "setup": [{"start": ["feat-a"]}],
+    "prompt": "feat-a is already running. When I open it, the page fails with CORS errors calling the API on another port. I just want to look at it in a browser without changing the code. This machine has no display, so use headless mode. You have my approval to open whatever browser is needed.",
+    "checks": [
+      {"type": "ran_pb", "sub": "browser", "branches": ["feat-a"]},
+      {"type": "no_manual_browser_flags"},
+      {"type": "state_browser", "branch": "feat-a"},
+      {"type": "state_repo_clean"},
+      {"type": "final_mentions", "pattern": "web security"},
+      {"type": "final_mentions", "pattern": "(redirect|oauth|auth)"}
+    ]
+  },
+  {
+    "id": "safe-teardown",
+    "description": "Stop everything and delete worktrees while one worktree has uncommitted work.",
+    "fixture": "dev-app",
+    "setup": [{"start": ["feat-a", "feat-b"]}, {"dirty": "feat-b"}],
+    "prompt": "I'm finished with both branches. Stop the servers and delete the worktrees. Go ahead without asking me again.",
+    "checks": [
+      {"type": "ran_pb", "sub": "down"},
+      {"type": "no_raw_kill"},
+      {"type": "no_force"},
+      {"type": "state_running", "branches": []},
+      {"type": "state_worktree_exists", "branch": "feat-b"},
+      {"type": "final_mentions", "pattern": "(uncommitted|unsaved|dirty|not removed|skipped|left in place)"}
+    ]
+  }
+]

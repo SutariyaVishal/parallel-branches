@@ -161,6 +161,19 @@ def stop_group(pgid, grace=8.0):
     return not group_alive(pgid)
 
 
+def remove_tree(path, tries=25, delay=0.2):
+    """Delete a directory tree, retrying while another process still holds files open.
+
+    Windows keeps a dead browser's files locked for a moment. Returns True once the path is gone.
+    """
+    for _ in range(tries):
+        shutil.rmtree(path, ignore_errors=True)
+        if not os.path.exists(path):
+            return True
+        time.sleep(delay)
+    return not os.path.exists(path)
+
+
 # ---------------------------------------------------------------------- locking
 
 @contextlib.contextmanager

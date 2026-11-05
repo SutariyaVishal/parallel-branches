@@ -641,7 +641,7 @@ def stop_browser(entry):
         stop_group(info["pgid"])
     profile = info.get("profile", "")
     if os.path.basename(os.path.dirname(profile)) == "profiles":  # only delete our own profile dirs
-        shutil.rmtree(profile, ignore_errors=True)
+        procs.remove_tree(profile)
     entry.pop("browser", None)
     return True
 

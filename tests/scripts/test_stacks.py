@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -212,7 +213,15 @@ class InstallPlanTests(TmpCase):
         plan = {"cmd": "echo fallback", "clone_from": os.path.join(self.main, "node_modules"), "note": "cloned"}
         ok, note = stacks.run_install(plan, self.wt, os.path.join(self.dir, "i.log"), 30)
         self.assertTrue(ok)
-        self.assertTrue(os.path.exists(os.path.join(self.wt, "node_modules", "x", "index.js")))
+        cloned = os.path.exists(os.path.join(self.wt, "node_modules", "x", "index.js"))
+        if sys.platform == "darwin" or sys.platform.startswith("linux"):
+            self.assertTrue(cloned or "installed instead" in note)  # a non-CoW filesystem may fall back
+        else:
+            self.assertFalse(cloned)  # no clone on Windows: the install command must have run instead
+        if not cloned:
+            self.assertIn("installed instead: echo fallback", note)  # and the note must not claim a clone
+        else:
+            self.assertEqual(note, "cloned")
         bad = {"cmd": "exit 4", "clone_from": None, "note": "x"}
         ok, note = stacks.run_install(bad, self.wt, os.path.join(self.dir, "i.log"), 30)
         self.assertFalse(ok)

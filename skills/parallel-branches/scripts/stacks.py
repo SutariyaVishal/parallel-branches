@@ -474,6 +474,7 @@ def run_install(plan, path, log_path, timeout):
         if clone_directory(plan["clone_from"], dest):
             return True, plan["note"]
         shutil.rmtree(dest, ignore_errors=True)  # partial copy; fall back to a real install
+        plan = dict(plan, note="clone not possible here, installed instead: " + str(plan.get("cmd")))
     if not plan.get("cmd"):
         return False, "no install command available"
     with open(log_path, "w") as log:

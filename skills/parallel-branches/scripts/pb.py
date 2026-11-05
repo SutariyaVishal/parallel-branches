@@ -5,7 +5,7 @@ Each branch gets its own git worktree, its own port and its own detached dev
 server. State lives under the repository's git common dir, so every worktree
 of the repo sees the same registry.
 
-Subcommands: up, status, down, clean.
+Subcommands: up, status, down, clean, detect, browser.
 Python 3.9+, standard library only.
 """
 
@@ -22,6 +22,10 @@ import socket
 import subprocess
 import sys
 import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import devbrowser  # noqa: E402
+import stacks  # noqa: E402
 
 try:
     import fcntl
@@ -316,70 +320,225 @@ def render_command(template, port, hmr_port):
     return template.replace("{PORT}", str(port)).replace("{HMR_PORT}", str(hmr_port))
 
 
+def check_branch_name(branch):
+    if not branch.strip() or branch.startswith("-"):
+        raise PbError("invalid branch name: %r" % branch)
+
+
+def worktree_path_for(repo, branch):
+    for item in list_worktrees(repo):
+        if item.get("branch") == branch:
+            return item["path"]
+    return None
+
+
 # ------------------------------------------------------------------- commands
 
 def default_worktree_dir(main):
     return main + ".worktrees"
 
 
+def resolve_settings(args, path, main, fresh=False):
+    """Merge CLI flags, .parallel-branches.json and stack detection for one branch."""
+    cfg = stacks.load_config(path, main)
+    stack = stacks.detect_stack(path)
+    template = args.cmd or cfg.get("cmd") or (stack or {}).get("cmd")
+    if not template:
+        raise PbError("could not work out how to start the project in %s; pass --cmd "
+                      "(or run: pb.py detect)" % path)
+    env = dict((stack or {}).get("env") or {})
+    env.update(cfg.get("env") or {})
+    if args.no_install or cfg.get("install") is False or os.path.realpath(path) == os.path.realpath(main) \
+            and not fresh:
+        install = None
+    elif isinstance(cfg.get("install"), str):
+        install = {"cmd": cfg["install"], "clone_from": None, "note": "install: " + cfg["install"]}
+    else:
+        install = stacks.plan_install(path, main, stack, fresh=fresh)
+    return {"template": template, "env": env, "install": install, "stack": stack,
+            "health_path": args.health_path or cfg.get("health_path") or "/",
+            "copy": cfg.get("copy") or []}
+
+
+def up_one(args, state, state_dir, main, base_dir, branch):
+    """Start one branch. Returns (result_row, failed)."""
+    existing = state["branches"].get(branch)
+    if existing and entry_owns_process(existing):
+        return dict(existing, note="already running"), False
+    port, hmr = allocate_ports(branch, state)
+    known = worktree_path_for(args.repo, branch)
+    if args.dry_run:
+        settings = resolve_settings(args, known or main, main, fresh=known is None)
+        row = {"branch": branch, "port": port, "hmr_port": hmr,
+               "cmd": stacks.render(settings["template"], port, hmr, known or main),
+               "stack": (settings["stack"] or {}).get("name"),
+               "confidence": (settings["stack"] or {}).get("confidence"),
+               "install": (settings["install"] or {}).get("note"),
+               "note": "dry run, nothing started" + ("" if known else " (stack detected from the main checkout)")}
+        return row, False
+    path, created = ensure_worktree(args.repo, main, branch, base_dir, args.create)
+    created = created or bool(existing and existing.get("created_worktree"))
+    settings = resolve_settings(args, path, main)
+    stack = settings["stack"] or {}
+    log_dir = os.path.join(state_dir, "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, slugify(branch) + ".log")
+    entry = {
+        "branch": branch, "path": path, "port": port, "hmr_port": hmr,
+        "url": "http://localhost:%d" % port, "pid": None, "pgid": None, "token": None,
+        "log": log_path, "created_worktree": created, "started_at": int(time.time()),
+        "status": "failed", "stack": stack.get("name"), "confidence": stack.get("confidence"),
+    }
+    state["branches"][branch] = entry
+    if created and path != main:
+        entry["copied_env"] = stacks.copy_env_files(main, path, settings["copy"])
+    if settings["install"]:
+        ok, note = stacks.run_install(settings["install"], path,
+                                      os.path.join(log_dir, slugify(branch) + ".install.log"),
+                                      args.install_timeout)
+        entry["install"] = note
+        if not ok:
+            save_state(state_dir, state)
+            return dict(entry, note="FAILED: " + note), True
+    entry["cmd"] = stacks.render(settings["template"], port, hmr, path)
+    env = dict(os.environ, PORT=str(port), HMR_PORT=str(hmr), BROWSER="none")
+    for key, value in settings["env"].items():
+        env[key] = stacks.render(str(value), port, hmr, path)
+    risks = stacks.scan_risks(path, {port, hmr})
+    entry["cors_risk"], entry["warnings"] = risks["cors_risk"], risks["findings"]
+    with open(log_path, "w") as log:
+        proc = subprocess.Popen(
+            entry["cmd"], shell=True, cwd=path, env=env, stdin=subprocess.DEVNULL,
+            stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
+        )
+    entry.update(pid=proc.pid, pgid=proc.pid, token=process_token(proc.pid), status="running")
+    save_state(state_dir, state)
+    deadline = time.time() + args.timeout
+    healthy, detail = False, "timed out after %ds" % args.timeout
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            healthy, detail = False, "process exited with code %s" % proc.returncode
+            break
+        healthy, detail = check_health(entry, settings["health_path"], not args.no_verify_owner)
+        if healthy:
+            break
+        time.sleep(0.4)
+    if healthy:
+        entry["healthy"] = True
+        return dict(entry, note=detail), False
+    stop_group(proc.pid)
+    entry.update(status="failed", pid=None, pgid=None, token=None)
+    hint = ""
+    if stack.get("confidence") == "low":
+        hint = "\nThe stack was detected with low confidence; the server may ignore PORT. " \
+               "Pass --cmd with the right port flag."
+    return dict(entry, note="FAILED: %s\n%s%s" % (detail, tail(log_path), hint)), True
+
+
 def cmd_up(args):
     main, state_dir = repo_info(args.repo)
     base_dir = args.worktree_dir or default_worktree_dir(main)
+    for branch in args.branches:
+        check_branch_name(branch)
     results, failed = [], False
     with locked(state_dir):
         state = load_state(state_dir)
         for branch in args.branches:
-            existing = state["branches"].get(branch)
-            if existing and entry_owns_process(existing):
-                results.append(dict(existing, note="already running"))
-                continue
-            port, hmr = allocate_ports(branch, state)
-            command = render_command(args.cmd, port, hmr)
-            if args.dry_run:
-                results.append({"branch": branch, "port": port, "hmr_port": hmr,
-                                "cmd": command, "note": "dry run, nothing started"})
-                continue
-            path, created = ensure_worktree(args.repo, main, branch, base_dir, args.create)
-            created = created or bool(existing and existing.get("created_worktree"))
-            log_dir = os.path.join(state_dir, "logs")
-            os.makedirs(log_dir, exist_ok=True)
-            log_path = os.path.join(log_dir, slugify(branch) + ".log")
-            env = dict(os.environ, PORT=str(port), HMR_PORT=str(hmr))
-            with open(log_path, "w") as log:
-                proc = subprocess.Popen(
-                    command, shell=True, cwd=path, env=env, stdin=subprocess.DEVNULL,
-                    stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
-                )
-            entry = {
-                "branch": branch, "path": path, "port": port, "hmr_port": hmr,
-                "url": "http://localhost:%d" % port, "cmd": command,
-                "pid": proc.pid, "pgid": proc.pid, "token": process_token(proc.pid),
-                "log": log_path, "created_worktree": created,
-                "started_at": int(time.time()), "status": "running",
-            }
-            state["branches"][branch] = entry
-            save_state(state_dir, state)
-            deadline = time.time() + args.timeout
-            healthy, detail = False, "timed out after %ds" % args.timeout
-            while time.time() < deadline:
-                if proc.poll() is not None:
-                    healthy, detail = False, "process exited with code %s" % proc.returncode
-                    break
-                healthy, detail = check_health(entry, args.health_path, not args.no_verify_owner)
-                if healthy:
-                    break
-                time.sleep(0.4)
-            if healthy:
-                entry["healthy"] = True
-                results.append(dict(entry, note=detail))
-            else:
-                failed = True
-                stop_group(proc.pid)
-                entry.update(status="failed", pid=None, pgid=None, token=None)
-                results.append(dict(entry, note="FAILED: %s\n%s" % (detail, tail(log_path))))
+            row, bad = up_one(args, state, state_dir, main, base_dir, branch)
+            failed = failed or bad
+            entry = state["branches"].get(branch)
+            if args.browser and not bad and not args.dry_run and entry:
+                try:
+                    row["browser"] = ensure_browser(state_dir, state, entry, args.chrome, "", args.headless_browser)
+                except PbError as exc:
+                    row["note"] = "%s (browser: %s)" % (row.get("note", ""), exc)
+            results.append(row)
             save_state(state_dir, state)
     print_results(results, args.json)
     return 1 if failed else 0
+
+
+# -------------------------------------------------------------------- browser
+
+def browser_alive(entry):
+    info = entry.get("browser")
+    return bool(info) and group_alive(info["pgid"]) and process_token(info["pid"]) == info["token"]
+
+
+def free_cdp_port(state):
+    used = {e["browser"]["cdp_port"] for e in state["branches"].values() if e.get("browser")}
+    for port in range(devbrowser.CDP_BASE, devbrowser.CDP_BASE + 200):
+        if port not in used and port_is_free(port):
+            return port
+    raise PbError("no free port for the browser debugging endpoint")
+
+
+def ensure_browser(state_dir, state, entry, chrome_arg, path, headless):
+    """Open (or reuse) the dev-mode browser for a running branch. Returns its info dict."""
+    if browser_alive(entry):
+        return entry["browser"]
+    if path and not path.startswith("/"):
+        raise PbError("--path must start with /")
+    chrome = devbrowser.find_chrome(chrome_arg)
+    if not chrome:
+        raise PbError("no Chrome or Chromium found; pass --chrome PATH or set PB_CHROME")
+    profile = os.path.join(state_dir, "profiles", slugify(entry["branch"]))
+    shutil.rmtree(profile, ignore_errors=True)  # always start from an empty profile
+    cdp_port = free_cdp_port(state)
+    url = entry["url"] + path  # always a localhost URL
+    proc = devbrowser.launch(chrome, profile, cdp_port, url, headless)
+    if not devbrowser.wait_for_cdp(cdp_port):
+        stop_group(proc.pid)
+        shutil.rmtree(profile, ignore_errors=True)
+        raise PbError("the browser did not start (no DevTools endpoint on port %d)" % cdp_port)
+    entry["browser"] = {"pid": proc.pid, "pgid": proc.pid, "token": process_token(proc.pid),
+                        "cdp_port": cdp_port, "profile": profile, "url": url}
+    return entry["browser"]
+
+
+def stop_browser(entry):
+    info = entry.get("browser")
+    if not info:
+        return False
+    if browser_alive(entry):
+        stop_group(info["pgid"])
+    profile = info.get("profile", "")
+    if os.path.basename(os.path.dirname(profile)) == "profiles":  # only delete our own profile dirs
+        shutil.rmtree(profile, ignore_errors=True)
+    entry.pop("browser", None)
+    return True
+
+
+def cmd_browser(args):
+    _, state_dir = repo_info(args.repo)
+    with locked(state_dir):
+        state = load_state(state_dir)
+        entry = state["branches"].get(args.branch)
+        if not entry or not entry_owns_process(entry):
+            raise PbError("'%s' is not running; start it first with: pb.py up %s" % (args.branch, args.branch))
+        info = ensure_browser(state_dir, state, entry, args.chrome, args.path or "", args.headless)
+        save_state(state_dir, state)
+    print_browser(args.branch, info, args.json)
+    return 0
+
+
+def print_browser(branch, info, as_json):
+    if as_json:
+        print(json.dumps(dict(info, branch=branch), indent=2))
+        return
+    print("%s: dev-mode browser open on %s" % (branch, info["url"]))
+    print("  WARNING: web security is OFF in this browser (CORS bypass). Use it only for this local app.")
+    print("  DevTools endpoint: http://127.0.0.1:%d  (agents: attach with Playwright --cdp-endpoint)"
+          % info["cdp_port"])
+
+
+def cmd_detect(args):
+    main, _ = repo_info(args.repo)
+    path = os.path.abspath(args.path) if args.path else main
+    stack = stacks.detect_stack(path)
+    print(json.dumps({"path": path, "stack": stack, "config": stacks.load_config(path),
+                      "install": stacks.plan_install(path, main, stack, fresh=True)}, indent=2))
+    return 0 if stack else 1
 
 
 def live_status(entry, path="/"):
@@ -398,15 +557,17 @@ def cmd_status(args):
     for branch in sorted(state["branches"]):
         entry = state["branches"][branch]
         status, detail = live_status(entry)
-        rows.append(dict(entry, live=status, detail=detail))
+        rows.append(dict(entry, live=status, detail=detail, browser_alive=browser_alive(entry)))
     if args.json:
         print(json.dumps(rows, indent=2))
         return 0
     if not rows:
         print("No branches registered.")
         return 0
-    table([("BRANCH", "URL", "STATUS", "PID", "PATH")] +
-          [(r["branch"], r["url"], r["live"], str(r.get("pid") or "-"), r["path"]) for r in rows])
+    table([("BRANCH", "URL", "STATUS", "PID", "DEV-BROWSER", "PATH")] +
+          [(r["branch"], r["url"], r["live"], str(r.get("pid") or "-"),
+            ("cdp:%d" % r["browser"]["cdp_port"]) if r["browser_alive"] else "-", r["path"])
+           for r in rows])
     return 0
 
 
@@ -433,6 +594,8 @@ def cmd_down(args):
             else:
                 print("%s: could not stop process group %d" % (branch, entry["pgid"]))
                 continue
+            if stop_browser(entry):
+                print("%s: dev-mode browser closed" % branch)
             entry.update(status="stopped", pid=None, pgid=None, token=None)
         save_state(state_dir, state)
     return 0
@@ -491,10 +654,27 @@ def print_results(results, as_json):
                      r.get("path", "-")))
     table(rows)
     for r in results:
+        name = r["branch"]
+        if r.get("stack"):
+            print("%s: stack %s (%s confidence)" % (name, r["stack"], r.get("confidence", "?")))
+        if r.get("cmd"):
+            print("%s: command %s" % (name, r["cmd"]))
+        if r.get("install"):
+            print("%s: %s" % (name, r["install"]))
+        if r.get("copied_env"):
+            print("%s: copied env files %s" % (name, ", ".join(r["copied_env"])))
         if r.get("note"):
-            print("%s: %s" % (r["branch"], r["note"]))
+            print("%s: %s" % (name, r["note"]))
         if r.get("log") and r.get("healthy"):
-            print("%s: log %s" % (r["branch"], r["log"]))
+            print("%s: log %s" % (name, r["log"]))
+        for w in r.get("warnings") or []:
+            suffix = " (auth/redirect: a dev-mode browser will not fix this)" if w.get("auth") else ""
+            print("%s: WARNING %s:%d %s [%s]%s" % (name, w["file"], w["line"], w["url"], w["kind"], suffix))
+        if r.get("cors_risk"):
+            print("%s: CORS risk found. Open the dev-mode browser: pb.py browser %s" % (name, name))
+        if r.get("browser"):
+            print("%s: dev-mode browser open, DevTools endpoint http://127.0.0.1:%d (web security OFF)"
+                  % (name, r["browser"]["cdp_port"]))
 
 
 # ------------------------------------------------------------------------ CLI
@@ -506,17 +686,37 @@ def build_parser():
 
     up = sub.add_parser("up", help="create worktrees and start one dev server per branch")
     up.add_argument("branches", nargs="+")
-    up.add_argument("--cmd", required=True,
-                    help="dev command; {PORT} and {HMR_PORT} are replaced, and both are also exported")
+    up.add_argument("--cmd",
+                    help="dev command; {PORT} and {HMR_PORT} are replaced and also exported. "
+                         "Default: .parallel-branches.json, then stack detection")
     up.add_argument("--create", action="store_true", help="create the branch from HEAD if it does not exist")
     up.add_argument("--worktree-dir", help="where to put new worktrees (default: <repo>.worktrees)")
     up.add_argument("--timeout", type=int, default=60, help="seconds to wait for the server (default 60)")
-    up.add_argument("--health-path", default="/", help="URL path used for the health check")
+    up.add_argument("--health-path", help="URL path used for the health check (default /)")
+    up.add_argument("--no-install", action="store_true", help="do not install or copy dependencies")
+    up.add_argument("--install-timeout", type=int, default=900, help="seconds allowed for installing (default 900)")
+    up.add_argument("--browser", action="store_true",
+                    help="also open a dev-mode browser (web security off) on each started branch")
+    up.add_argument("--chrome", help="path to Chrome/Chromium for --browser (or set PB_CHROME)")
+    up.add_argument("--headless-browser", dest="headless_browser", action="store_true",
+                    help="run the --browser instance headless")
     up.add_argument("--no-verify-owner", action="store_true",
                     help="skip the check that our process owns the port (for servers that daemonize)")
     up.add_argument("--dry-run", action="store_true", help="show ports and commands, start nothing")
     up.add_argument("--json", action="store_true")
     up.set_defaults(func=cmd_up)
+
+    det = sub.add_parser("detect", help="show how the project would be started and installed")
+    det.add_argument("path", nargs="?", help="directory to inspect (default: main checkout)")
+    det.set_defaults(func=cmd_detect)
+
+    br = sub.add_parser("browser", help="open a dev-mode browser (web security OFF, throwaway profile)")
+    br.add_argument("branch")
+    br.add_argument("--path", help="URL path to open, must start with / (default: /)")
+    br.add_argument("--chrome", help="path to Chrome/Chromium (or set PB_CHROME)")
+    br.add_argument("--headless", action="store_true")
+    br.add_argument("--json", action="store_true")
+    br.set_defaults(func=cmd_browser)
 
     st = sub.add_parser("status", help="show registered branches and their health")
     st.add_argument("--json", action="store_true")

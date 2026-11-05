@@ -1,0 +1,7 @@
+{
+  "cmd": "npm run dev -- --port {PORT} --strictPort",
+  "install": "npm ci",
+  "env": { "API_URL": "http://localhost:8080" },
+  "health_path": "/",
+  "copy": ["config/local.json"]
+}

@@ -1,8 +1,16 @@
 {
   "name": "parallel-branches",
+  "version": "0.2.0",
   "description": "Run several git branches side by side, each with its own worktree, dev server and port.",
-  "author": { "name": "Vishal Sutariya" },
+  "author": {
+    "name": "Vishal Sutariya"
+  },
   "repository": "https://github.com/SutariyaVishal/parallel-branches",
   "license": "MIT",
-  "keywords": ["git", "worktree", "dev-server", "parallel"]
+  "keywords": [
+    "git",
+    "worktree",
+    "dev-server",
+    "parallel"
+  ]
 }

@@ -13,14 +13,17 @@ jobs:
     name: tests (${{ matrix.os }}, python ${{ matrix.python }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    # macOS jobs sat queued until cancelled on this private repo (no steps ever ran), so they must not
+    # block the run. They still report; re-enable by removing `experimental` once macOS runners work.
+    continue-on-error: ${{ matrix.experimental == true }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - {os: ubuntu-22.04, python: "3.9"}   # setup-python has no 3.9 build for ubuntu-24.04
           - {os: ubuntu-latest, python: "3.12"}
-          - {os: macos-latest, python: "3.9"}
-          - {os: macos-latest, python: "3.12"}
+          - {os: macos-latest, python: "3.9", experimental: true}
+          - {os: macos-latest, python: "3.12", experimental: true}
     env:
       # Chrome cannot create its sandbox on hosted runners.
       PB_CHROME_ARGS: --no-sandbox

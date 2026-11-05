@@ -67,8 +67,8 @@ parallel-branches/
 Install: Claude Code `/plugin marketplace add <owner>/<repo>`; other agents copy `skills/parallel-branches` into `.agents/skills/`.
 
 ## Phases
-0. **Generic validation (no coupling to any one framework or auth provider):** build tiny throwaway sample apps in `tests/fixtures/` (e.g. Vite, Flask, Express, plus one multi-port host+remote pair) and verify per-stack port mechanisms from the research table. Auth/CORS: CORS handled by the dev-mode browser; non-CORS auth failures stay a generic "hardcoded port/redirect" warning, never provider-specific logic. Also verify the dev-mode Chrome flags work on the current Chrome version, and that a Playwright-driven agent can attach (CDP) to it.
-1. `pb.py` core: worktree, ports, detached start/stop, registry, health check, tests.
+0. **Done** (see docs/phase0-results.md). Generic validation (no coupling to any one framework or auth provider):** build tiny throwaway sample apps in `tests/fixtures/` (e.g. Vite, Flask, Express, plus one multi-port host+remote pair) and verify per-stack port mechanisms from the research table. Auth/CORS: CORS handled by the dev-mode browser; non-CORS auth failures stay a generic "hardcoded port/redirect" warning, never provider-specific logic. Also verify the dev-mode Chrome flags work on the current Chrome version, and that a Playwright-driven agent can attach (CDP) to it.
+1. `pb.py` core: worktree, ports, detached start/stop, registry, health check, tests. **Done** (see Phase 1 status below).
 2. SKILL.md + references; stack detection for top ~8 stacks.
 3. Evals (3+ scenarios, test on Haiku/Sonnet/Opus) and script tests.
 4. Package (plugin/marketplace, README with demo GIF), license, CI, publish.
@@ -97,3 +97,11 @@ Install: Claude Code `/plugin marketplace add <owner>/<repo>`; other agents copy
 - License: MIT.
 - Scope: platform-agnostic across frameworks, languages and repos. No framework-, auth-provider- or company-specific code or defaults.
 - Name still working title `parallel-branches` (not yet confirmed).
+
+## Phase 1 status
+Implemented in `skills/parallel-branches/scripts/pb.py` (Python 3.9+, stdlib only): `up`, `status`, `down`, `clean`.
+- The dev command comes from `--cmd` with `{PORT}` and `{HMR_PORT}` placeholders (both also exported as env vars). Stack detection is Phase 2.
+- Tests use `unittest` instead of pytest, to keep the project dependency-free: `python3 -m unittest discover tests/scripts` (20 tests).
+- Safety implemented: process-group kill of only the processes we started, a start-time token to avoid killing a reused PID, owner-verified health check, dirty-worktree guard, `clean` is a dry run without `--yes`.
+
+Not yet done (Phase 2 or later): dependency install/sharing, env-file copying, stack auto-detection, `.parallel-branches.json` config, `browser` command (dev-mode Chrome), hardcoded-port warnings, retry on a lost port race, Windows support.

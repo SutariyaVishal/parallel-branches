@@ -1,6 +1,6 @@
 # parallel-branches
 
-> **Status: planning.** No working code yet. See [PLAN.md](PLAN.md) for the research and design.
+> **Status: early development.** `up`, `status`, `down` and `clean` work. Stack detection, dependency install and the dev-mode browser are not built yet. See [PLAN.md](PLAN.md) for the research and design.
 
 An agent skill that lets you work on several git branches at the same time and run each branch's dev server side by side, so you can compare them in the browser.
 
@@ -25,7 +25,7 @@ You have two tasks, each on its own branch. You cannot run both branches at once
 |---|---|
 | `up <branch...>` | Create worktrees, start servers, print URLs |
 | `status` | List branches, ports, URLs, PIDs and health |
-| `browser <branch>` | Open a dev-mode browser for a branch |
+| `browser <branch>` | Open a dev-mode browser for a branch (not built yet) |
 | `down <branch>` | Stop that branch's servers |
 | `clean` | Remove worktrees that are no longer needed |
 
@@ -36,3 +36,14 @@ A dev-mode browser fixes CORS only. It does not fix OAuth or OIDC redirect URI m
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## Try it
+
+```
+python3 skills/parallel-branches/scripts/pb.py up feature-a feature-b --cmd 'npm run dev -- --port {PORT} --strictPort'
+python3 skills/parallel-branches/scripts/pb.py status
+python3 skills/parallel-branches/scripts/pb.py down --all
+python3 skills/parallel-branches/scripts/pb.py clean --yes
+```
+
+Run the tests with `python3 -m unittest discover tests/scripts`.

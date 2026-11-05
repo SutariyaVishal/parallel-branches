@@ -26,7 +26,7 @@
       {"type": "no_real_up"},
       {"type": "state_running", "branches": []},
       {"type": "final_mentions", "pattern": "npm run dev"},
-      {"type": "final_mentions", "pattern": "(approve|confirm|proceed|go ahead|want me to|shall I|ok to|okay to)"}
+      {"type": "final_mentions", "pattern": "(approve|confirm|proceed|go ahead|want me to|shall I|should I|would you like|do you want|let me know|ok to|okay to)"}
     ]
   },
   {

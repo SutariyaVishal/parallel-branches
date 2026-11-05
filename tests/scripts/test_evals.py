@@ -146,10 +146,13 @@ class OracleTests(unittest.TestCase):
         repo = run_evals.prepare(scenario, self.root)
         self.repos.append(repo)
         issued = [c(repo) if callable(c) else c for c in commands]
+        self.output = ""
         for command in issued:
             if command in record_only:
                 continue
-            subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            proc = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  universal_newlines=True)
+            self.output += "$ %s\n%s%s\n" % (command, proc.stdout, proc.stderr)
         run = {"commands": issued, "final_text": final, "state": run_evals.collect_state(repo)}
         return graders.grade(run, scenario["checks"]), repo
 
@@ -199,7 +202,7 @@ class OracleTests(unittest.TestCase):
         results, _ = self.play("cors-browser", [lambda r: cmd(r, "browser feat-a --headless")],
                                "Opened a dev-mode browser. Web security is off in it. "
                                "OAuth redirect URIs are not fixed by this.")
-        self.assertEqual(self.failed(results), [])
+        self.assertEqual(self.failed(results), [], self.output)
         self.tearDown_state()
         results, _ = self.play("cors-browser", ["chrome --disable-web-security"], "Opened Chrome.",
                                record_only=("chrome --disable-web-security",))

@@ -60,7 +60,7 @@ def launch(chrome, profile_dir, cdp_port, url, headless=False):
                             stderr=subprocess.DEVNULL, start_new_session=True)
 
 
-def wait_for_cdp(cdp_port, timeout=15.0):
+def wait_for_cdp(cdp_port, timeout=30.0):
     """True once the DevTools endpoint answers."""
     deadline = time.time() + timeout
     while time.time() < deadline:

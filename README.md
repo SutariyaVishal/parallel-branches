@@ -33,11 +33,9 @@ You have two tasks, each on its own branch. You cannot run both branches at once
 
 A dev-mode browser fixes CORS only. It does not fix OAuth or OIDC redirect URI mismatches, servers that reject on `Origin`, or cookies shared across localhost ports. The skill warns about these.
 
-## License
-
-MIT. See [LICENSE](LICENSE).
-
 ## Try it
+
+Dependencies are not installed in new worktrees yet, so for now use a command that already works there (or install first).
 
 ```
 python3 skills/parallel-branches/scripts/pb.py up feature-a feature-b --cmd 'npm run dev -- --port {PORT} --strictPort'
@@ -47,3 +45,6 @@ python3 skills/parallel-branches/scripts/pb.py clean --yes
 ```
 
 Run the tests with `python3 -m unittest discover tests/scripts`.
+
+## License
+MIT. See [LICENSE](LICENSE).

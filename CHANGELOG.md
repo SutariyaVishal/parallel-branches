@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.1
+- Windows support: process and lock handling moved to `procs.py` (`taskkill /T`, `msvcrt`); tests run on `windows-latest`. Stopping a service there is a forced kill of its process tree, and the port-owner check is skipped.
+- Fix: the install note claimed a `node_modules` clone after the clone failed and an install ran instead.
+- Fix: the dev-mode browser profile is now deleted with retries (Windows keeps files locked briefly).
+- Fix: `{PY}` is quoted when the project path has spaces, and the Python install command no longer hardcodes `.venv/bin`.
+- CI: Ubuntu, Windows and macOS (own workflow). macOS tests had been timing out because the test servers used `python -m http.server`, whose bind took 35 s there; they now use `tests/helpers/serve.py`.
+
 ## 0.5.0
 - `restart BRANCH [SERVICE]`: restart one service or all of them on the same ports.
 - Monorepo detection: `init` suggests a `services` config from workspaces (npm, yarn, pnpm, lerna) or conventional folders, `detect` reports it, and `up` points at `init` instead of failing blindly.

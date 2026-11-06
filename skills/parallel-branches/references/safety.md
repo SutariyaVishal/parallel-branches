@@ -25,7 +25,8 @@ It does not edit tracked files, change git config, push, or touch the network ex
 
 ## Known limits
 
-- Windows is untested. Process-group handling and `lsof` are POSIX.
+- `python -m http.server` can take over 30 seconds to open its port on hosts where reverse DNS is slow (measured: 35 s on a GitHub macOS runner), because its bind does a `getfqdn()` lookup. The process looks alive while the port is closed, so `pb.py up` reports `timed out ... nothing answering on port N`. Raise `--timeout`, or use a server that does not look up its own name.
+- Windows: stopping a service force-kills its whole process tree (no graceful signal), and the check that our process owns the port is skipped. The tests that need a POSIX shell are skipped there.
 - A server that daemonizes escapes its process group. Use `--no-verify-owner`, and stop it yourself.
 - If another program takes a port between the free-port check and the server's bind, the start fails and is reported. It is not retried.
 - Each dev server costs real memory. Three or four at once is a sensible ceiling on a laptop.

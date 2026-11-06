@@ -2,7 +2,7 @@
 name: parallel-branches
 description: Runs several git branches side by side, each in its own worktree with its own dev server and port, so they can be compared in the browser. Use when the user wants to work on multiple tasks or branches at once, run different branches at the same time, check two branches in a browser together, open a CORS-free dev browser for a locally running app, or stop and clean up the servers and worktrees it started.
 license: MIT
-compatibility: Requires git and python3 (3.9 or newer). Chrome or Chromium is needed only for the dev-mode browser. macOS and Linux are tested; Windows is not.
+compatibility: Requires git and python3 (3.9 or newer). Chrome or Chromium is needed only for the dev-mode browser. Tested in CI on Linux, macOS and Windows; Windows has limits (see references/safety.md).
 ---
 
 # parallel-branches

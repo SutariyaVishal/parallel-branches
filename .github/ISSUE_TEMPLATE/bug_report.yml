@@ -1,0 +1,48 @@
+name: Bug report
+description: Something did not work, or worked wrongly
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran, what you expected, what you got. Paste the exact output.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: pb version
+      description: From CHANGELOG.md or .claude-plugin/plugin.json
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options: [macOS, Linux, Windows]
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      description: "`python3 --version`"
+    validations:
+      required: true
+  - type: input
+    id: stack
+    attributes:
+      label: Project stack
+      description: Framework and package manager, for example "Vite, pnpm" or "Django".
+  - type: textarea
+    id: detect
+    attributes:
+      label: Output of `pb detect` and `pb up BRANCH --dry-run`
+      render: shell
+  - type: textarea
+    id: log
+    attributes:
+      label: Server log, if a start failed
+      description: Under `.git/parallel-branches/logs/`. Remove anything private first.
+      render: shell

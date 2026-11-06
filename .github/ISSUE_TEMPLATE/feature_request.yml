@@ -1,0 +1,16 @@
+name: Feature request or stack support
+description: Ask for a new stack, a command, or a behaviour
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What are you trying to do?
+      description: The situation first, then the change you have in mind.
+    validations:
+      required: true
+  - type: textarea
+    id: stack
+    attributes:
+      label: For a new stack
+      description: How the dev server is started, and how its port is set (flag, environment variable, or config file). A link to the docs helps.

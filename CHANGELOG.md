@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.5.4
+- Docs for a public release: rewritten README (real example session, comparison with other tools, limits), `docs/DESIGN.md` replaces the working plan, `SECURITY.md`, issue and pull-request templates.
+
 ## 0.5.3
 - Fix (Windows): lockfile comparison ignores line endings. Git for Windows commits a lockfile with LF and checks it out with CRLF, so the dry run saw identical lockfiles as different and planned a reinstall instead of a `node_modules` clone.
 
@@ -28,7 +31,7 @@
 
 ## 0.3.1
 - Skill: `SKILL.md` now says to write the full `pb.py` path (no shell variables) so approval rules can match, and states plainly that servers must not start before the user approves the plan. The description also covers stopping and cleaning up.
-- Evals: `--repeat`, cost and skill-use reporting. First real-model results: see PLAN.md.
+- Evals: `--repeat`, cost and skill-use reporting. First real-model results: see docs/DESIGN.md.
 
 ## 0.3.0
 - Evals: four scenarios with deterministic graders, a runner for the Claude Code CLI, and scripted-agent tests.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Phase 0: which port mechanism does each fixture honor? Prints one result line per probe.
-# Usage: tests/phase0/probe-ports.sh   (needs fixtures installed: see PLAN.md)
+# Usage: tests/phase0/probe-ports.sh   (needs the fixtures installed: `npm install` in fixtures/vite-app, a venv with flask in fixtures/flask-app)
 set -u
 ROOT="$(cd "$(dirname "$0")/../fixtures" && pwd)"
 LOG="${TMPDIR:-/tmp}/pb-probe"; mkdir -p "$LOG"

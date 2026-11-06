@@ -54,6 +54,7 @@ Five scenarios graded by deterministic rules (`tests/evals/`), run with Claude H
 | 2, after fixes | 10 of 12 | Haiku started servers without approval in one run; one grader pattern missed wording. |
 | Approval wording | Haiku skipped approval in about 2 of 7 runs before the rule was strengthened and 0 of 10 after | Sonnet and Opus never skipped it. |
 | Final skill text | 12 of 12, then 6 of 6 on the multi-service scenario | |
+| After hooks (0.6.0) | 14 of 15 perfect, all five scenarios on three models, $1.63. The miss: Sonnet opened the dev browser without saying what it cannot fix (OAuth redirects, `Origin` checks, cookies) | `SKILL.md` step 4 now says to name those limits. After that: Sonnet 4 of 4 perfect, Haiku 9 of 10 (one 4/6 run, cause not captured) |
 
 Skill changes the evals drove: write the literal `pb.py` path in every command (approval rules match literal text, so a shell variable can never be pre-approved), mention stopping and cleaning up in the description (Sonnet did not load the skill for a teardown request), and state the approval rule explicitly.
 
@@ -78,5 +79,5 @@ Caveats: small samples; the graders were adjusted after reading agent output, so
 - `status` does not show per-service logs, or hook results (only `status --json` does, under `hook_runs`).
 - Hooks have no concurrent form and no user-level config. `restart` runs none.
 - A config committed on a branch can only be read after its worktree exists, so a mistake in it (hooks or services) is reported after the worktree was created and the worktree is not tracked for `clean`. The dry run reads the main checkout's config first.
-- The evals were last run before hooks existed, and have no hook scenario.
+- The evals ran after hooks were added, but no scenario covers hooks yet, so the hook approval rule in `SKILL.md` is untested with real models.
 - The evals have not been run against models other than Claude's.

@@ -201,7 +201,8 @@ class OracleTests(unittest.TestCase):
         self.tearDown_state()
         results, _ = self.play("multi-service", [
             lambda r: cmd(r, "up feat-a --dry-run"),
-            lambda r: cmd(r, "up feat-a --cmd '%s -m http.server {PORT}'" % sys.executable)],
+            lambda r: cmd(r, "up feat-a --cmd '%s %s {PORT}'" % (sys.executable, fixtures.os.path.join(
+                fixtures.ROOT, "tests", "helpers", "serve.py")))],
             "Started the web app at http://localhost:4210 and the api.")
         self.assertEqual(self.failed(results), ["state_extras_ok"])
 

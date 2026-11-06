@@ -8,27 +8,34 @@ import sys
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 PB = os.path.join(ROOT, "skills", "parallel-branches", "scripts", "pb.py")
 BRANCHES = ("feat-a", "feat-b")
-DEV_SCRIPT = "python3 -m http.server $PORT --bind 127.0.0.1"
+# A tiny server that reads PORT. Not `python -m http.server`, whose bind does a reverse DNS lookup
+# that can take tens of seconds on some hosts (see tests/helpers/serve.py).
+with open(os.path.join(ROOT, "tests", "helpers", "serve.py")) as _fh:
+    SERVE_PY = _fh.read()
+DEV_SCRIPT = "python3 serve.py"
 
 FILES = {
     "dev-app": {
         "package.json": json.dumps({"name": "demo", "scripts": {"dev": DEV_SCRIPT}}, indent=2),
         ".parallel-branches.json": json.dumps({"install": False}),
+        "serve.py": SERVE_PY,
         "index.html": "<!doctype html><title>demo</title><h1>demo</h1>\n",
     },
     # Same app, but it talks to an API on another port and has an OAuth redirect URI.
     "cors-app": {
         "package.json": json.dumps({"name": "demo", "scripts": {"dev": DEV_SCRIPT}}, indent=2),
         ".parallel-branches.json": json.dumps({"install": False}),
+        "serve.py": SERVE_PY,
         "index.html": "<!doctype html><title>demo</title><h1>demo</h1>\n",
         ".env.example": "VITE_API_URL=http://localhost:9999/api\nOAUTH_REDIRECT_URI=http://localhost:4200/callback\n",
     },
     # A branch that needs two processes: an API and a web app that finds it through {url.api}.
     "multi-app": {
         "package.json": json.dumps({"name": "demo"}, indent=2),
+        "serve.py": SERVE_PY,
         ".parallel-branches.json": json.dumps({"services": [
-            {"name": "api", "cmd": "python3 -m http.server {PORT} --bind 127.0.0.1", "install": False},
-            {"name": "web", "cmd": "python3 -m http.server {PORT} --bind 127.0.0.1", "install": False,
+            {"name": "api", "cmd": "python3 serve.py {PORT}", "install": False},
+            {"name": "web", "cmd": "python3 serve.py {PORT}", "install": False,
              "env": {"API_URL": "{url.api}"}, "depends_on": ["api"], "primary": True}]}),
         "index.html": "<!doctype html><title>demo</title><h1>demo</h1>\n",
     },

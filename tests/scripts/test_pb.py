@@ -15,13 +15,12 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 PB = os.path.join(ROOT, "skills", "parallel-branches", "scripts", "pb.py")
 POSIX_ONLY = unittest.skipIf(os.name == "nt", "needs a POSIX shell")
 PY = '"%s"' % sys.executable  # the interpreter running the tests, quoted for either shell
-SERVER = PY + " -m http.server {PORT} --bind 127.0.0.1"
-GROUP_SERVER = "sh -c 'python3 -m http.server {PORT} --bind 127.0.0.1 & wait'"
+HELPER = os.path.join(ROOT, "tests", "helpers", "serve.py")
+SERVER = PY + ' "%s" {PORT}' % HELPER  # not `-m http.server`: see tests/helpers/serve.py
+GROUP_SERVER = "sh -c '%s \"%s\" {PORT} & wait'" % (sys.executable, HELPER)
 # Reads PORT from the environment, the way a typical dev server does. Used through `npm run dev`.
-SERVE_PY = ("import http.server, os, socketserver\n"
-            "socketserver.TCPServer.allow_reuse_address = True\n"
-            "http.server.test(HandlerClass=http.server.SimpleHTTPRequestHandler, "
-            "port=int(os.environ['PORT']), bind='127.0.0.1')\n")
+with open(HELPER) as _fh:
+    SERVE_PY = _fh.read()
 FAIL_CMD = PY + " -c \"import sys; print('boom', file=sys.stderr); sys.exit(3)\""
 SLEEP_CMD = PY + " -c \"import time; time.sleep(60)\""
 

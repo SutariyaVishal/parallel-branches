@@ -38,7 +38,7 @@ What none of them did, as far as I found: read an unknown repository, work out h
 ## Measured
 
 - **Port mechanisms, real servers:** see [phase0-results.md](phase0-results.md). Node, Vite 5 and Flask 3.
-- **Dev-mode Chrome 156, headless and headed:** a no-CORS API on another port is blocked in a normal Chrome and readable with the flags; `--disable-site-isolation-trials` was not needed. An agent attached over CDP with `playwright-core`.
+- **Dev-mode Chrome 156, headless and headed:** a no-CORS API on another port is blocked in a normal Chrome and readable with the flags; `--disable-site-isolation-trials` was not needed. An agent attached over CDP with `playwright-core`, and again with the stock `@playwright/mcp` 0.0.84 server started with `--cdp-endpoint` (stdio, driven by a script): a page on the branch's port read an API on another port that sends no CORS headers.
 - **A CI-only failure worth knowing about:** on a GitHub macOS runner `socket.getfqdn("127.0.0.1")` took 35 s, so `python -m http.server` (which calls it when binding) took 35 s to open its port while its process looked alive. The tests now use a server that does not do that lookup.
 - **Real application, dry run only:** on a large Angular application, detection, the start command and the install plan were right, and the scan found the hardcoded `localhost:4200` redirect URI and the identity-provider host, tagged as things a dev-mode browser cannot fix. Nothing was started there.
 
@@ -70,7 +70,7 @@ Caveats: small samples; the graders were adjusted after reading agent output, so
 - Only Vite, Flask and plain Node ports were measured on real servers. The other stacks follow documentation. Angular detection was checked by a dry run on a real application, not by running it.
 - A port lost between the free-port check and the server's bind is reported, not retried.
 - Windows stops a service by force-killing its process tree and skips the port-owner check.
-- Attaching through Playwright MCP's own `--cdp-endpoint` is untested; only `playwright-core` was.
+- Chrome versions other than 156 were not tried with the dev-mode browser.
 - Not detected: Docker Compose, Rust, .NET, PHP (use `--cmd`).
 - `status` does not show per-service logs.
 - The evals have not been run against models other than Claude's.

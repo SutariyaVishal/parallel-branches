@@ -31,4 +31,4 @@ Measured on Chrome 156 (macOS): a host page fetching a no-CORS remote was blocke
 
 ## Not verified
 
-Attaching through Playwright MCP's own `--cdp-endpoint` option (only `playwright-core` was tested), and Chrome versions other than 156.
+Chrome versions other than 156. Attaching with `playwright-core` and with `@playwright/mcp` 0.0.84 (`--cdp-endpoint`) were both tested; other Playwright MCP versions were not.

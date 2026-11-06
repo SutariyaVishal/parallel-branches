@@ -21,6 +21,15 @@ FILES = {
         "serve.py": SERVE_PY,
         "index.html": "<!doctype html><title>demo</title><h1>demo</h1>\n",
     },
+    # The dev app plus hooks: a marker written once the server is healthy, and a teardown command.
+    "hooks-app": {
+        "package.json": json.dumps({"name": "demo", "scripts": {"dev": DEV_SCRIPT}}, indent=2),
+        ".parallel-branches.json": json.dumps({"install": False, "hooks": {
+            "post_start": "python3 -c \"open('seeded.txt','w').write('{PORT}')\"",
+            "post_remove": "echo dropping database {db_name}"}}),
+        "serve.py": SERVE_PY,
+        "index.html": "<!doctype html><title>demo</title><h1>demo</h1>\n",
+    },
     # Same app, but it talks to an API on another port and has an OAuth redirect URI.
     "cors-app": {
         "package.json": json.dumps({"name": "demo", "scripts": {"dev": DEV_SCRIPT}}, indent=2),

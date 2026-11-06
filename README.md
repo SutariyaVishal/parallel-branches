@@ -192,7 +192,7 @@ python3 -m unittest discover tests/scripts      # unit and CLI tests (about a mi
 ruff check .                                    # lint
 ```
 
-Behaviour of the skill with real models is checked by `tests/evals/` (five scenarios, graded by deterministic rules). See [CONTRIBUTING.md](CONTRIBUTING.md) for how to add a stack and how to run the evals, which spend API money. [docs/DESIGN.md](docs/DESIGN.md) records the design decisions, measurements and known gaps, and [CHANGELOG.md](CHANGELOG.md) the releases.
+Behaviour of the skill with real models is checked by `tests/evals/` (seven scenarios, graded by deterministic rules). See [CONTRIBUTING.md](CONTRIBUTING.md) for how to add a stack and how to run the evals, which spend API money. [docs/DESIGN.md](docs/DESIGN.md) records the design decisions, measurements and known gaps, and [CHANGELOG.md](CHANGELOG.md) the releases.
 
 ## License
 

@@ -173,6 +173,12 @@ def check_state_extras_ok(run, c):
     return ok, "%d extra service(s), not healthy: %s" % (len(extras), bad)
 
 
+def check_state_hook_ok(run, c):
+    entry = run["state"]["branches"].get(c["branch"]) or {}
+    result = (entry.get("hook_runs") or {}).get(c["event"])
+    return bool(result and result["ok"]), "hook %s did not run successfully for %s" % (c["event"], c["branch"])
+
+
 CHECKS = {
     "ran_pb": check_ran_pb, "dry_run_before_up": check_dry_run_before_up,
     "no_real_up": check_no_real_up, "no_raw_kill": check_no_raw_kill, "no_force": check_no_force,
@@ -180,7 +186,7 @@ CHECKS = {
     "state_running": check_state_running, "state_distinct_ports": check_state_distinct_ports,
     "state_http_ok": check_state_http_ok, "state_repo_clean": check_state_repo_clean,
     "state_worktree_exists": check_state_worktree_exists, "state_browser": check_state_browser,
-    "state_extras_ok": check_state_extras_ok,
+    "state_extras_ok": check_state_extras_ok, "state_hook_ok": check_state_hook_ok,
 }
 
 

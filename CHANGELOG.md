@@ -5,6 +5,7 @@
 - `up --dry-run` prints every hook with its values filled in. `clean` without `--yes` lists the `post_remove` commands. `down` and `clean` run the commands stored when the branch started, not the current config.
 - Install now finishes for every service before the first one starts, so `pre_start` sits between the two.
 - `SKILL.md`: after opening the dev-mode browser, say what it does not fix (found by the evals: Sonnet skipped it once).
+- Evals: two hooks scenarios (`hooks-confirm-first`, `hooks-run`) and a `state_hook_ok` check, seven scenarios in all.
 - Docs: Playwright MCP attached with `--cdp-endpoint` is verified (0.0.84). Demo GIF. `CODEOWNERS` and branch and tag rulesets, to apply once the repo is public.
 
 ## 0.5.4

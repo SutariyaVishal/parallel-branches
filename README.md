@@ -8,7 +8,7 @@ Run several git branches side by side, each with its own dev server on its own p
 
 It is an [agent skill](https://agentskills.io) (for Claude Code, Codex, Gemini CLI, Cursor and others that read `SKILL.md`) built around one dependency-free Python script, `pb.py`. You can also use the script on its own.
 
-> **Status: beta (v0.6.0).** Tested in CI on Linux, macOS and Windows with Python 3.9 and newer. Port handling was measured against real Vite, Flask and plain Node servers; the other stacks follow each tool's documentation. See [Limits](#limits).
+> **Status: beta (v0.7.0).** Tested in CI on Linux, macOS and Windows with Python 3.9 and newer. Port handling was measured against real Vite, Flask and plain Node servers; the other stacks follow each tool's documentation. See [Limits](#limits).
 
 ## The problem
 
@@ -89,7 +89,8 @@ When detection finds nothing, or guesses wrong, say what to run: `pb up feature-
 | `pb status [--json]` | Branches, URLs, health, dev-browser endpoints |
 | `pb restart BRANCH [SERVICE]` | Restart one service or all of them, on the same ports |
 | `pb down BRANCH...` or `--all` | Stop what `pb` started, and close its dev browsers. `--no-hooks` skips `pre_stop` |
-| `pb clean [--yes] [--force]` | Remove worktrees `pb` created. A dry run unless `--yes`. `--no-hooks` skips `post_remove` |
+| `pb clean [--yes] [--force]` | Remove worktrees `pb` created. A dry run unless `--yes`. `--no-hooks` skips `pre_remove` and `post_remove` |
+| `pb hook EVENT BRANCH [--dry-run]` | Run one stored hook of a tracked branch by hand, or show it |
 | `pb browser BRANCH` | Open a dev-mode browser (web security off, throwaway profile) |
 | `pb init [--write]` | Suggest a `services` config for a monorepo |
 | `pb detect [PATH]` | Show the detected stack, install plan and any monorepo suggestion |
@@ -132,7 +133,7 @@ Run your own commands at fixed points: create a database when the worktree appea
 }
 ```
 
-Five events: `post_create` (new worktree, before install), `pre_start` (before any service starts), `post_start` (every service healthy), `pre_stop` (`down`, services still up) and `post_remove` (`clean --yes`). A failing `post_create` or `pre_start` stops `up`; a failing `post_start`, `pre_stop` or `post_remove` is reported and never keeps a branch from starting, stopping or being removed.
+Six events: `post_create` (new worktree, before install), `pre_start` (before any service starts), `post_start` (every service healthy), `pre_stop` (`down`, services still up), `pre_remove` (`clean --yes`, just before the worktree goes) and `post_remove` (after it is gone). A failing `post_create` or `pre_start` stops `up`, and a failing `pre_remove` keeps its worktree (`clean --no-hooks` removes it anyway). A failing `post_start`, `pre_stop` or `post_remove` is only reported. `pb hook EVENT BRANCH` runs one by hand.
 
 What sets this apart from a plain "run a command" hook:
 
@@ -140,6 +141,7 @@ What sets this apart from a plain "run a command" hook:
 - `post_start` runs only after the health checks pass.
 - Values are shell-quoted, so a branch named `a$(touch${IFS}pwned)`, which git accepts, cannot run anything.
 - `up --dry-run` prints every hook with values filled in. `down` and `clean` run the commands stored when the branch started, not whatever the config says later.
+- `pb hook post_start feat-a` runs a stored hook again, for example to re-seed a database; `--dry-run` only shows it.
 - Each command has a timeout and a log file.
 
 Full reference: [`skills/parallel-branches/references/hooks.md`](skills/parallel-branches/references/hooks.md). `parallel-branches` has no commit or merge hooks; it does not commit or merge.

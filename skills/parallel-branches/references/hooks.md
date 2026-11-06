@@ -11,6 +11,7 @@ They go under `hooks` in `.parallel-branches.json`:
     "pre_start": ["npm run migrate"],
     "post_start": "curl -fsS -X POST {url.api}/seed",
     "pre_stop": "pg_dump {db_name} > ../{branch_slug}.sql",
+    "pre_remove": "git status --short > ../{branch_slug}.leftovers",
     "post_remove": "dropdb --if-exists {db_name}"
   },
   "hook_timeout": 120
@@ -27,6 +28,7 @@ Each event takes one command string or a list of strings. A list runs in order a
 | `pre_start` | On every `up`, after install and before any service starts | the worktree | `up` stops, nothing starts |
 | `post_start` | After every service answered its health check | the worktree | Reported as a warning. The servers stay up |
 | `pre_stop` | In `down`, while the services are still running | the worktree | Reported. The services are stopped anyway |
+| `pre_remove` | In `clean --yes`, after the dirty check and just before the worktree is removed | the worktree | That worktree is kept and `clean` says so. `clean --no-hooks` removes it anyway |
 | `post_remove` | In `clean --yes`, after the worktree is removed | the main checkout | Reported. The worktree stays removed |
 
 `restart` runs no hooks. It is for picking up a code change, not for setting a branch up again.
@@ -56,8 +58,12 @@ Hook commands run in a shell on your machine, like a start command. So:
 
 - `up --dry-run` prints every hook with its values filled in. Read them before approving.
 - The commands are stored with the branch when it starts. `down` and `clean` run those stored commands, not whatever the config file says by then, so a different checkout cannot swap in new teardown commands after you approved the old ones.
-- `clean` without `--yes` prints the `post_remove` commands it would run.
+- `clean` without `--yes` prints the `pre_remove` and `post_remove` commands it would run.
 - `--no-hooks` skips them (on `up` it also stores none, so nothing runs at teardown). Pass it to `down` and `clean` to skip stored ones.
+
+## Running one by hand
+
+`pb hook EVENT BRANCH` runs the stored commands of one event for a tracked branch, with the ports and names the branch has now, and prints `hook EVENT ok` or the failure. Use it to seed a database again or to try a hook without stopping and starting everything. `--dry-run` prints the commands with values filled in and runs nothing (no lock, no state written). `--hook-timeout N` applies to that run only. The exit code is 1 when the hook fails and 2 for an untracked branch. A hook the branch did not store (for example one added to the config after `up`) is not run: start the branch again so the dry run shows it and it is stored. It works on a branch that is stopped, and `post_remove` runs in the main checkout as it does in `clean`.
 
 ## Timeouts and logs
 

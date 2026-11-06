@@ -8,10 +8,12 @@ Events, in the order a branch meets them:
   pre_start    dependencies installed, no service started yet (runs on every `up`)
   post_start   every service answered its health check
   pre_stop     `down`, while the services are still running
+  pre_remove   `clean --yes`, just before the worktree is removed
   post_remove  `clean --yes`, after the worktree is gone
 
-post_create and pre_start abort `up` when they fail. The others only report a failure, so a broken
-hook can never keep a branch from stopping or being removed.
+post_create and pre_start abort `up` when they fail, and pre_remove keeps its worktree in place (`--no-hooks`
+removes it anyway). The others only report a failure, so a broken hook can never keep a branch from
+stopping or from being removed by `clean --no-hooks`.
 
 Commands may use {branch} {branch_slug} {db_name} {worktree} {repo} {PORT} {HMR_PORT} {URL}
 {ports.NAME} {url.NAME}. Substituted values are shell-quoted, because a branch name can contain
@@ -26,8 +28,8 @@ import subprocess
 import procs
 import stacks
 
-EVENTS = ("post_create", "pre_start", "post_start", "pre_stop", "post_remove")
-BLOCKING = ("post_create", "pre_start")
+EVENTS = ("post_create", "pre_start", "post_start", "pre_stop", "pre_remove", "post_remove")
+BLOCKING = ("post_create", "pre_start", "pre_remove")
 DEFAULT_TIMEOUT = 120
 MAX_TIMEOUT = 3600
 # `$` before the brace means the shell's own ${VAR}, which is not ours to touch.

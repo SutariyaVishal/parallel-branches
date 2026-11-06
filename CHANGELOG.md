@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.0
+- New hook `pre_remove`: runs in `clean --yes` inside the worktree, just before it is removed (database dumps, saving local data). Unlike the other teardown hooks it can stop the removal: if it fails, that worktree is kept and `clean` says so. `clean --no-hooks` removes it anyway. `clean` without `--yes` lists it before `post_remove`.
+- New command `pb hook EVENT BRANCH [--dry-run] [--hook-timeout N]`: runs one stored hook of a tracked branch by hand, for example to seed a database again. It runs the commands stored when the branch started, with the ports it has now. `--dry-run` prints them with values filled in and takes no lock. Exit code 1 when the hook fails.
+
 ## 0.6.0
 - Lifecycle hooks: `hooks` in `.parallel-branches.json` with `post_create`, `pre_start`, `post_start`, `pre_stop` and `post_remove`. Commands may use `{branch}`, `{db_name}`, `{PORT}`, `{url.NAME}` and more (shell-quoted), and get the same values as `PB_*` environment variables. `post_create` and `pre_start` failures stop `up`; the others only report. Per-command timeout (`hook_timeout`, `up --hook-timeout`), one log per event, `--no-hooks` on `up`, `down` and `clean`.
 - `up --dry-run` prints every hook with its values filled in. `clean` without `--yes` lists the `post_remove` commands. `down` and `clean` run the commands stored when the branch started, not the current config.

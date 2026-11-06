@@ -912,9 +912,15 @@ def cmd_clean(args):
                 print("%s: would remove worktree %s (rerun with --yes)" % (branch, path))
                 if not args.no_hooks:
                     ctx = hooks.context_from_entry(entry, main, slugify(branch))
-                    for text in (entry.get("hooks") or {}).get("post_remove", []):
-                        print("%s: would then run hook post_remove: %s" % (branch, hooks.render(text, ctx)))
+                    for event, when in (("pre_remove", "first"), ("post_remove", "then")):
+                        for text in (entry.get("hooks") or {}).get(event, []):
+                            print("%s: would %s run hook %s: %s" % (branch, when, event, hooks.render(text, ctx)))
                 continue
+            if not args.no_hooks and run_hook(entry, "pre_remove", main, state_dir, results):
+                report_hook(branch, results[0])
+                if not results[0]["ok"]:  # the hook may be what saves something; keep the worktree
+                    print("%s: worktree kept because pre_remove failed (fix it, or use --no-hooks)" % branch)
+                    continue
             if args.force:
                 git(main, "worktree", "remove", "--force", path)
             else:
@@ -925,6 +931,34 @@ def cmd_clean(args):
             state["branches"].pop(branch)
         save_state(state_dir, state)
     return 0
+
+
+def cmd_hook(args):
+    """Run, or with --dry-run only show, one stored hook of a tracked branch."""
+    main, state_dir = repo_info(args.repo)
+    with contextlib.nullcontext() if args.dry_run else locked(state_dir):  # a dry run takes no lock
+        state = load_state(state_dir)
+        entry = state["branches"].get(args.branch)
+        if not entry:
+            raise PbError("%s is not tracked; start it with `up` first" % args.branch)
+        commands = (entry.get("hooks") or {}).get(args.event)
+        if not commands:
+            print("%s: no %s hook stored (hooks are read from the config when the branch starts)"
+                  % (args.branch, args.event))
+            return 0
+        if args.dry_run:
+            ctx = hooks.context_from_entry(entry, main, slugify(args.branch))
+            for text in commands:
+                print("%s: hook %s: %s" % (args.branch, args.event, hooks.render(text, ctx)))
+            return 0
+        timeout = args.hook_timeout or entry.get("hook_timeout")
+        results = []
+        run_hook(dict(entry, hook_timeout=timeout), args.event, main, state_dir, results)
+        report_hook(args.branch, results[0])
+        entry.setdefault("hook_runs", {})[args.event] = {"ok": results[0]["ok"], "log": results[0]["log"],
+                                                           "at": int(time.time())}
+        save_state(state_dir, state)
+        return 0 if results[0]["ok"] else 1
 
 
 # --------------------------------------------------------------------- output
@@ -1055,8 +1089,15 @@ def build_parser():
     clean = sub.add_parser("clean", help="remove worktrees this tool created (dry run unless --yes)")
     clean.add_argument("--yes", action="store_true", help="actually remove")
     clean.add_argument("--force", action="store_true", help="also remove worktrees with uncommitted changes")
-    clean.add_argument("--no-hooks", action="store_true", help="do not run the post_remove hook")
+    clean.add_argument("--no-hooks", action="store_true", help="do not run the pre_remove and post_remove hooks")
     clean.set_defaults(func=cmd_clean)
+
+    hk = sub.add_parser("hook", help="run one stored hook of a tracked branch by hand (--dry-run only shows it)")
+    hk.add_argument("event", choices=hooks.EVENTS)
+    hk.add_argument("branch")
+    hk.add_argument("--dry-run", action="store_true", help="print the command with values filled in, run nothing")
+    hk.add_argument("--hook-timeout", type=int, help="seconds allowed per command (default: what the branch stored)")
+    hk.set_defaults(func=cmd_hook)
     return parser
 
 

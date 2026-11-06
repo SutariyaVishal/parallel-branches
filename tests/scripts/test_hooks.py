@@ -88,6 +88,10 @@ class HookCase(PbCase):
     def labels(self):
         return [r["label"] for r in self.records()]
 
+    def state_text(self):
+        with open(os.path.join(self.repo, ".git", "parallel-branches", "state.json")) as fh:
+            return fh.read()
+
 
 class LifecycleTests(HookCase):
     def test_every_event_runs_in_order_with_the_real_ports(self):
@@ -153,13 +157,25 @@ class LifecycleTests(HookCase):
         self.assertFalse(os.path.exists(os.path.join(self.repo, ".git", "parallel-branches")))
         self.assertFalse(os.path.exists(os.path.join(self.wt, "feat-a")))
 
-    def test_clean_dry_run_shows_the_post_remove_hook(self):
-        self.config({"post_remove": self.probe("post_remove")})
+    def test_clean_dry_run_shows_the_remove_hooks_in_order(self):
+        self.config({"pre_remove": self.probe("pre_remove"), "post_remove": self.probe("post_remove")})
         self.up("feat-a")
         self.pb("down", "feat-a")
         proc = self.pb("clean")
-        self.assertIn("would then run hook post_remove", proc.stdout)
+        self.assertRegex(proc.stdout, r"would first run hook pre_remove[^\n]*\n[^\n]*would then run hook post_remove")
         self.assertEqual(self.labels(), [])
+
+    def test_pre_remove_runs_in_the_worktree_before_post_remove(self):
+        self.config({"pre_remove": self.probe("pre_remove", "{branch_slug}"),
+                     "post_remove": self.probe("post_remove")})
+        _, rows = self.up("feat-a")
+        self.pb("down", "feat-a")
+        proc = self.pb("clean", "--yes")
+        self.assertIn("hook pre_remove ok", proc.stdout)
+        self.assertEqual(self.labels(), ["pre_remove", "post_remove"])
+        before, after = self.records()
+        self.assertEqual((before["args"], before["cwd"]), (["feat-a"], rows[0]["path"]))
+        self.assertEqual(after["cwd"], self.repo)
 
 
 class FailureTests(HookCase):
@@ -203,6 +219,30 @@ class FailureTests(HookCase):
         self.assertIn("WARNING hook post_remove failed", proc.stdout)
         self.assertFalse(os.path.exists(rows[0]["path"]))
 
+    def test_failing_pre_remove_keeps_the_worktree_until_no_hooks_is_given(self):
+        self.config({"pre_remove": FAIL_CMD, "post_remove": self.probe("post_remove")})
+        _, rows = self.up("feat-a")
+        self.pb("down", "feat-a")
+        proc = self.pb("clean", "--yes")
+        self.assertIn("WARNING hook pre_remove failed", proc.stdout)
+        self.assertIn("worktree kept because pre_remove failed", proc.stdout)
+        self.assertTrue(os.path.isdir(rows[0]["path"]))
+        self.assertEqual(self.labels(), [])  # post_remove has nothing to follow
+        self.assertEqual([r["branch"] for r in json.loads(self.pb("status", "--json").stdout)], ["feat-a"])
+        proc = self.pb("clean", "--yes", "--no-hooks")
+        self.assertIn("removed worktree", proc.stdout)
+        self.assertFalse(os.path.exists(rows[0]["path"]))
+
+    def test_pre_remove_does_not_run_for_a_worktree_clean_skips(self):
+        self.config({"pre_remove": self.probe("pre_remove")})
+        _, rows = self.up("feat-a")
+        self.pb("down", "feat-a")
+        with open(os.path.join(rows[0]["path"], "scratch.txt"), "w") as fh:
+            fh.write("unsaved")
+        proc = self.pb("clean", "--yes")
+        self.assertIn("uncommitted changes, skipped", proc.stdout)
+        self.assertEqual(self.labels(), [])
+
     def test_a_hook_that_hangs_is_killed_after_the_timeout(self):
         self.config({"pre_start": SLEEP_CMD})
         started = __import__("time").time()
@@ -228,6 +268,65 @@ class FailureTests(HookCase):
         self.assertEqual(json.loads(self.pb("status", "--json").stdout), [])
         dry = self.pb("up", "feat-a", "--cmd", SERVER, "--worktree-dir", self.wt, "--dry-run")
         self.assertEqual(dry.returncode, 2)  # a dry run catches it before any worktree exists
+
+
+class HookCommandTests(HookCase):
+    def test_runs_the_stored_hook_with_the_ports_the_branch_has(self):
+        self.config({"post_start": self.probe("seed", "{URL}")})
+        _, rows = self.up("feat-a")
+        url = "http://localhost:%d" % rows[0]["port"]
+        proc = self.pb("hook", "post_start", "feat-a")
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("feat-a: hook post_start ok", proc.stdout)
+        self.assertEqual(self.labels(), ["seed", "seed"])  # once from `up`, once by hand
+        last = self.records()[-1]
+        self.assertEqual((last["args"], last["cwd"], last["fetched"][url]), ([url], rows[0]["path"], 200))
+        self.assertTrue(json.loads(self.pb("status", "--json").stdout)[0]["hook_runs"]["post_start"]["ok"])
+
+    def test_dry_run_prints_the_command_and_runs_nothing(self):
+        self.config({"pre_stop": self.probe("pre_stop", "{db_name}")})
+        self.up("feat-a")
+        before = self.state_text()
+        proc = self.pb("hook", "pre_stop", "feat-a", "--dry-run")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertRegex(proc.stdout, r"feat-a: hook pre_stop: .*pre_stop feat_a_[0-9a-f]{4}")
+        self.assertEqual(self.labels(), [])
+        self.assertEqual(self.state_text(), before)
+
+    def test_runs_what_was_stored_not_what_the_config_says_now(self):
+        self.config({"post_start": self.probe("approved")})
+        self.up("feat-a")
+        self.config({"post_start": self.probe("swapped-in-later")})
+        self.pb("hook", "post_start", "feat-a")
+        self.assertEqual(self.labels(), ["approved", "approved"])
+
+    def test_a_failing_hook_exits_1_and_says_so(self):
+        self.config({"post_start": FAIL_CMD})
+        self.up("feat-a")
+        proc = self.pb("hook", "post_start", "feat-a")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("WARNING hook post_start failed", proc.stdout)
+        self.assertFalse(json.loads(self.pb("status", "--json").stdout)[0]["hook_runs"]["post_start"]["ok"])
+
+    def test_hook_timeout_applies_to_this_run_only(self):
+        self.config({"pre_stop": SLEEP_CMD})
+        self.up("feat-a")
+        proc = self.pb("hook", "pre_stop", "feat-a", "--hook-timeout", "1")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("timed out after 1s", proc.stdout)
+        entry = json.loads(self.pb("status", "--json").stdout)[0]
+        self.assertNotEqual(entry.get("hook_timeout"), 1)
+
+    def test_untracked_branch_and_missing_hook_and_unknown_event(self):
+        proc = self.pb("hook", "post_start", "nope")
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("not tracked", proc.stderr)
+        self.config({"post_start": self.probe("x")})
+        self.up("feat-a")
+        proc = self.pb("hook", "pre_stop", "feat-a")
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("no pre_stop hook stored", proc.stdout)
+        self.assertEqual(self.pb("hook", "post_merge", "feat-a").returncode, 2)  # argparse rejects it
 
 
 class TrustTests(HookCase):

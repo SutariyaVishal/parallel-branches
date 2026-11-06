@@ -408,10 +408,12 @@ def file_hash(path):
     return digest.hexdigest()
 
 
-def plan_install(path, main, stack, fresh=False):
+def plan_install(path, main, stack, fresh=False, branch_lock_hash=None):
     """What to do about dependencies in `path`. Returns a dict, or None if nothing is needed.
 
     `fresh` pretends `path` is a brand-new worktree (used for dry runs and `detect`).
+    `branch_lock_hash` is the lockfile hash on the branch about to be checked out; with it a dry run
+    can say whether `node_modules` would be cloned from the main checkout or installed.
 
     Keys: cmd (shell command or None), clone_from (directory to copy, or None), note.
     """
@@ -432,8 +434,11 @@ def plan_install(path, main, stack, fresh=False):
             cmd = "npm ci" if lockfile else "npm install"
         plan = {"cmd": cmd, "clone_from": None, "note": "install: " + cmd}
         source = os.path.join(main, "node_modules")
-        if (manager != "pnpm" and lockfile and os.path.isdir(source) and os.path.abspath(main) != os.path.abspath(path)
-                and file_hash(os.path.join(main, lockfile)) == file_hash(os.path.join(path, lockfile))):
+        target_hash = branch_lock_hash if branch_lock_hash is not None else (
+            file_hash(os.path.join(path, lockfile)) if lockfile else None)
+        different_dir = branch_lock_hash is not None or os.path.abspath(main) != os.path.abspath(path)
+        if (manager != "pnpm" and lockfile and os.path.isdir(source) and different_dir
+                and target_hash is not None and file_hash(os.path.join(main, lockfile)) == target_hash):
             plan.update(clone_from=source, note="copy node_modules from main checkout (same %s)" % lockfile)
         return plan
     if family == "python":
@@ -548,7 +553,7 @@ def scan_risks(path, own_ports):
     Returns {"cors_risk": bool, "findings": [...]}. A finding has file, line, url, kind and auth.
     Kinds: "other-local-port" (localhost on a port that is not ours) and "remote-origin".
     """
-    findings = []
+    findings, seen = [], set()
     for filename in candidate_files(path):
         for number, line in enumerate(read_text(filename).splitlines(), 1):
             for match in URL_RE.finditer(line):
@@ -561,7 +566,12 @@ def scan_risks(path, own_ports):
                     kind = "remote-origin"
                 else:
                     continue
-                findings.append({"file": os.path.relpath(filename, path), "line": number,
-                                 "url": match.group(0)[:100], "kind": kind,
+                key = (os.path.relpath(filename, path), number, match.group(0))
+                if key in seen:
+                    continue
+                seen.add(key)
+                findings.append({"file": key[0], "line": number, "url": match.group(0)[:100], "kind": kind,
                                  "auth": bool(AUTH_WORDS.search(line))})
-    return {"cors_risk": bool(findings), "findings": findings[:12]}
+    # What a dev-mode browser cannot fix comes first, then local ports, then remote hosts.
+    findings.sort(key=lambda f: (not f["auth"], f["kind"] != "other-local-port"))
+    return {"cors_risk": bool(findings), "findings": findings[:40]}

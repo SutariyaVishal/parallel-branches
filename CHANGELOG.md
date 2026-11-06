@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.2
+- Fix: `up --dry-run` created `.git/parallel-branches/` (a lock file and an empty state file). A dry run now touches nothing.
+- Dry run now shows the hardcoded-URL and CORS warnings, and says whether `node_modules` would be cloned or installed, by comparing the lockfile committed on the branch with the main checkout's.
+- The risk scan drops duplicate hits, lists what a dev-mode browser cannot fix (OAuth/OIDC redirects) first, and keeps up to 40 hits so one file cannot hide the others. Text output groups plain API hosts per file.
+
 ## 0.5.1
 - Windows support: process and lock handling moved to `procs.py` (`taskkill /T`, `msvcrt`); tests run on `windows-latest`. Stopping a service there is a forced kill of its process tree, and the port-owner check is skipped.
 - Fix: the install note claimed a `node_modules` clone after the clone failed and an install ran instead.

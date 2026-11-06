@@ -390,6 +390,16 @@ def launch(rec, cmd, cwd, env, log_path, timeout, health_path, mode, verify_owne
     return False, detail
 
 
+def branch_lock_hash(repo, branch, main):
+    """sha256 of the lockfile as committed on `branch`, or None if there is none or it cannot be read."""
+    _, lockfile = stacks.node_manager(main)
+    if not lockfile:
+        return None
+    proc = subprocess.run(["git", "-C", repo, "show", "%s:%s" % (branch, lockfile)],
+                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    return hashlib.sha256(proc.stdout).hexdigest() if proc.returncode == 0 else None
+
+
 def up_one(args, state, state_dir, main, base_dir, branch):
     """Start one branch: its worktree and every service. Returns (result_row, failed)."""
     existing = state["branches"].get(branch)
@@ -422,6 +432,9 @@ def up_one(args, state, state_dir, main, base_dir, branch):
     if args.dry_run:
         rows = []
         for svc, svc_dir, st in prepared:
+            if known is None and st["install"] and svc.get("cwd", ".") in (".", ""):
+                st["install"] = stacks.plan_install(svc_dir, main, st["stack"], fresh=True,
+                                                    branch_lock_hash=branch_lock_hash(args.repo, branch, main))
             port, hmr = ports[svc["name"]]
             rows.append({"service": svc["name"], "port": port, "hmr_port": hmr,
                          "cmd": stacks.render(st["template"], port, hmr, svc_dir, port_map),
@@ -429,10 +442,12 @@ def up_one(args, state, state_dir, main, base_dir, branch):
                          "confidence": (st["stack"] or {}).get("confidence"),
                          "install": (st["install"] or {}).get("note")})
         main_row = next(r for r in rows if r["service"] == primary_name)
+        risks = stacks.scan_risks(path, {p for pair in ports.values() for p in pair})
         row = {"branch": branch, "port": main_row["port"], "hmr_port": main_row["hmr_port"],
                "cmd": main_row["cmd"], "stack": main_row["stack"], "confidence": main_row["confidence"],
-               "install": main_row["install"],
-               "note": "dry run, nothing started" + ("" if known else " (stack detected from the main checkout)")}
+               "install": main_row["install"], "cors_risk": risks["cors_risk"], "warnings": risks["findings"],
+               "note": "dry run, nothing started"
+                       + ("" if known else " (stack and warnings read from the main checkout)")}
         if multi:
             row["services"] = rows
         return row, False
@@ -523,7 +538,8 @@ def cmd_up(args):
     for branch in args.branches:
         check_branch_name(branch)
     results, failed = [], False
-    with locked(state_dir):
+    # A dry run must leave no trace, not even a lock file under .git, so it takes no lock.
+    with (contextlib.nullcontext() if args.dry_run else locked(state_dir)):
         state = load_state(state_dir)
         for branch in args.branches:
             row, bad = up_one(args, state, state_dir, main, base_dir, branch)
@@ -535,7 +551,8 @@ def cmd_up(args):
                 except PbError as exc:
                     row["note"] = "%s (browser: %s)" % (row.get("note", ""), exc)
             results.append(row)
-            save_state(state_dir, state)
+            if not args.dry_run:
+                save_state(state_dir, state)
     print_results(results, args.json)
     return 1 if failed else 0
 
@@ -861,10 +878,17 @@ def print_results(results, as_json):
             print("%s: %s" % (name, r["note"]))
         if r.get("log") and r.get("healthy"):
             print("%s: log %s" % (name, r["log"]))
+        remote = {}
         for w in r.get("warnings") or []:
+            if w["kind"] == "remote-origin" and not w.get("auth"):
+                remote.setdefault(w["file"], []).append(w)  # many API hosts in one file: one line
+                continue
             suffix = " (auth/redirect: a dev-mode browser will not fix this)" if w.get("auth") else ""
             where = w["file"] + (":%d" % w["line"] if w["line"] else "")
             print("%s: WARNING %s %s [%s]%s" % (name, where, w["url"], w["kind"], suffix))
+        for filename, items in remote.items():
+            print("%s: WARNING %s has %d other API host(s), e.g. %s [remote-origin]"
+                  % (name, filename, len(items), items[0]["url"]))
         if r.get("cors_risk"):
             print("%s: CORS risk found. Open the dev-mode browser: pb.py browser %s" % (name, name))
         if r.get("browser"):

@@ -276,6 +276,20 @@ class RiskScanTests(TmpCase):
         findings = stacks.scan_risks(self.dir, {4500})["findings"]
         self.assertEqual([f["auth"] for f in findings], [True, False])
 
+    def test_duplicates_are_dropped_and_what_a_dev_browser_cannot_fix_comes_first(self):
+        self.write(".env", "A=https://api.example-corp.io\nB=http://localhost:9999 http://localhost:9999\n"
+                           "C=http://localhost:4200/callback\n")
+        findings = stacks.scan_risks(self.dir, set())["findings"]
+        self.assertEqual(len(findings), 3)  # the repeated URL on line 2 counts once
+        self.assertTrue(findings[0]["auth"])  # redirect first
+        self.assertEqual([f["kind"] for f in findings][1:], ["other-local-port", "remote-origin"])
+
+    def test_many_hosts_do_not_hide_later_files(self):
+        self.write("a/.env", "".join("H%d=http://h%d.example-corp.io\n" % (i, i) for i in range(30)))
+        self.write(".env", "AUTH=http://localhost:4200/callback\n")
+        urls = [f["url"] for f in stacks.scan_risks(self.dir, set())["findings"]]
+        self.assertIn("http://localhost:4200/callback", urls)
+
     def test_clean_project_has_no_risk(self):
         self.write(".env", "NAME=app\nPORT=3000\n")
         self.assertEqual(stacks.scan_risks(self.dir, {4500}), {"cors_risk": False, "findings": []})

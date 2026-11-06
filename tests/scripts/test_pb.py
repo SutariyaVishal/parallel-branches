@@ -344,6 +344,35 @@ class DetectionCliTests(PbCase):
         self.assertIn("install", rows[0]["install"])
         self.assertFalse(os.path.exists(self.wt))
 
+    def test_dry_run_leaves_no_trace_in_the_repository(self):
+        self.add_files(self.NODE_FILES)
+        self.git("branch", "dev-a")
+        before = subprocess.run(["find", os.path.join(self.repo, ".git")], stdout=subprocess.PIPE,
+                                universal_newlines=True).stdout
+        self.up("dev-a", cmd=None, extra=("--dry-run",))
+        after = subprocess.run(["find", os.path.join(self.repo, ".git")], stdout=subprocess.PIPE,
+                               universal_newlines=True).stdout
+        self.assertEqual(before, after)  # no .git/parallel-branches, no lock or state file
+        self.assertFalse(os.path.exists(self.wt))
+
+    def test_dry_run_shows_the_warnings_and_what_the_install_would_do(self):
+        self.add_files({"package.json": json.dumps({"scripts": {"dev": "x"}}), "package-lock.json": '{"v":1}\n',
+                        ".env.example": "API=http://localhost:9999\nREDIRECT_URI=http://localhost:4200/cb\n"})
+        os.makedirs(os.path.join(self.repo, "node_modules", "pkg"))
+        self.git("branch", "old-lock")  # lockfile v1
+        self.add_files({"package-lock.json": '{"v":2}\n'}, "change deps")  # main now has v2
+        self.git("branch", "new-lock")
+        _, same = self.up("new-lock", cmd=None, extra=("--dry-run",))
+        # the lockfile on that branch matches main's, so node_modules can be cloned
+        self.assertIn("copy node_modules from main checkout", same[0]["install"])
+        _, other = self.up("old-lock", cmd=None, extra=("--dry-run",))
+        self.assertEqual(other[0]["install"], "install: npm ci")
+        self.assertTrue(other[0]["cors_risk"])
+        self.assertTrue(any(w["auth"] for w in other[0]["warnings"]))
+        text = self.pb("up", "old-lock", "--dry-run").stdout
+        self.assertIn("WARNING .env.example:2", text)
+        self.assertIn("a dev-mode browser will not fix this", text)
+
     def test_nothing_detected_asks_for_cmd(self):
         proc, _ = self.up("feat-a", cmd=None)
         self.assertEqual(proc.returncode, 2)
@@ -372,7 +401,7 @@ class DetectionCliTests(PbCase):
         self.git("branch", "dev-a")
         proc, rows = self.up("dev-a", cmd=SERVER)
         self.assertTrue(rows[0]["cors_risk"])
-        self.assertEqual([w["auth"] for w in rows[0]["warnings"]], [False, True])
+        self.assertEqual([w["auth"] for w in rows[0]["warnings"]], [True, False])  # redirect first
         text = self.pb("status").stdout  # status must still work with warnings stored
         self.assertIn("healthy", text)
 

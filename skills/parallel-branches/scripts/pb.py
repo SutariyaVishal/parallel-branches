@@ -397,7 +397,7 @@ def branch_lock_hash(repo, branch, main):
         return None
     proc = subprocess.run(["git", "-C", repo, "show", "%s:%s" % (branch, lockfile)],
                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    return hashlib.sha256(proc.stdout).hexdigest() if proc.returncode == 0 else None
+    return stacks.digest_bytes(proc.stdout) if proc.returncode == 0 else None
 
 
 def up_one(args, state, state_dir, main, base_dir, branch):

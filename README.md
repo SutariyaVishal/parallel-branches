@@ -1,6 +1,6 @@
 # parallel-branches
 
-> **Status: early development (v0.5.2).** Core commands, stack detection, dependency handling and the dev-mode browser work and are tested in CI on Linux, macOS and Windows (Python 3.9 and newer). Windows stops services by force-killing their process tree. The repository is private for now. See [PLAN.md](PLAN.md) for the design.
+> **Status: early development (v0.5.3).** Core commands, stack detection, dependency handling and the dev-mode browser work and are tested in CI on Linux, macOS and Windows (Python 3.9 and newer). Windows stops services by force-killing their process tree. The repository is private for now. See [PLAN.md](PLAN.md) for the design.
 
 An agent skill that lets you work on several git branches at the same time and run each branch's dev server side by side, so you can compare them in the browser.
 

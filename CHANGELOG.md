@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.5.3
+- Fix (Windows): lockfile comparison ignores line endings. Git for Windows commits a lockfile with LF and checks it out with CRLF, so the dry run saw identical lockfiles as different and planned a reinstall instead of a `node_modules` clone.
+
 ## 0.5.2
 - Fix: `up --dry-run` created `.git/parallel-branches/` (a lock file and an empty state file). A dry run now touches nothing.
 - Dry run now shows the hardcoded-URL and CORS warnings, and says whether `node_modules` would be cloned or installed, by comparing the lockfile committed on the branch with the main checkout's.

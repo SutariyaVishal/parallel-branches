@@ -426,6 +426,22 @@ class MonorepoTests(TmpCase):
         self.assertEqual((len(order), primary), (2, "web"))
 
 
+class LockfileHashTests(TmpCase):
+    def test_line_endings_do_not_change_the_hash(self):
+        lf = self.write("lf.lock", "a\nb\n")
+        crlf = os.path.join(self.dir, "crlf.lock")
+        with open(crlf, "wb") as fh:
+            fh.write(b"a\r\nb\r\n")
+        self.assertEqual(stacks.file_hash(lf), stacks.file_hash(crlf))
+        self.assertEqual(stacks.file_hash(lf), stacks.digest_bytes(b"a\r\nb\r\n"))
+
+    def test_different_content_still_differs_and_missing_files_are_none(self):
+        a = self.write("a.lock", "x\n")
+        b = self.write("b.lock", "y\n")
+        self.assertNotEqual(stacks.file_hash(a), stacks.file_hash(b))
+        self.assertIsNone(stacks.file_hash(os.path.join(self.dir, "nope.lock")))
+
+
 class ConfigTests(TmpCase):
     def test_first_config_wins_and_bad_json_is_ignored(self):
         other = os.path.join(self.dir, "other")

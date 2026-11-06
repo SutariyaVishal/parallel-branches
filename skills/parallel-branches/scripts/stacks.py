@@ -397,15 +397,22 @@ def cross_service_refs(services):
 
 # ----------------------------------------------------------- dependency setup
 
+def digest_bytes(data):
+    """sha256 of text-file content with line endings normalized.
+
+    Lockfiles are compared only to ask "same dependencies?". Git for Windows commits them with LF
+    but checks them out with CRLF, so raw bytes of the same lockfile can differ between the commit
+    and the working tree.
+    """
+    return hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest()
+
+
 def file_hash(path):
-    digest = hashlib.sha256()
     try:
         with open(path, "rb") as fh:
-            for chunk in iter(lambda: fh.read(1 << 20), b""):
-                digest.update(chunk)
+            return digest_bytes(fh.read())
     except OSError:
         return None
-    return digest.hexdigest()
 
 
 def plan_install(path, main, stack, fresh=False, branch_lock_hash=None):

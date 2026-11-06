@@ -1,0 +1,61 @@
+name: mac-diag
+
+# Temporary: finds out why server-starting tests time out on the macOS runner. Delete once understood.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: macos-latest
+    timeout-minutes: 25
+    env:
+      PB_CHROME_ARGS: --no-sandbox
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+      - name: Machine
+        run: |
+          uname -m; sw_vers; sysctl -n hw.ncpu hw.memsize; uptime
+          python3 -c "import platform,sys; print(sys.version); print(platform.machine())"
+          file "$(python3 -c 'import sys; print(sys.executable)')"
+      - name: Raw server start times
+        run: |
+          python3 - <<'PY'
+          import os, signal, socket, subprocess, sys, time
+          for n in range(8):
+              port = 4600 + n
+              log = open("/tmp/s%d.log" % n, "w")
+              t0 = time.time()
+              p = subprocess.Popen([sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1"],
+                                   stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+              ok = None
+              while time.time() - t0 < 30:
+                  try:
+                      socket.create_connection(("127.0.0.1", port), timeout=1).close()
+                      ok = time.time() - t0
+                      break
+                  except OSError:
+                      time.sleep(0.2)
+              print("trial", n, "port", port, "connected after", ok, "alive:", p.poll() is None, flush=True)
+              os.killpg(p.pid, signal.SIGTERM)
+              time.sleep(0.5)
+          PY
+      - name: Isolated test
+        run: timeout 300 python3 -m unittest -v tests/scripts/test_pb.py -k test_up_twice_is_idempotent -k test_two_branches 2>&1 | tail -40
+        continue-on-error: true
+      - name: CliTests only
+        run: timeout 600 python3 -m unittest discover tests/scripts -k CliTests 2>&1 | grep -E "^(FAIL|ERROR):|^Ran|^OK|^FAILED" | head -30
+        continue-on-error: true
+      - name: Chrome tests, then one server test
+        run: |
+          timeout 400 python3 -m unittest discover tests/scripts -k BrowserCliTests 2>&1 | grep -E "^(FAIL|ERROR):|^Ran|^OK|^FAILED|Error" | head -20
+          echo "--- processes left after the browser tests:"
+          ps -axo pid,etime,command | grep -Ei "chrome|http.server" | grep -v grep | cut -c1-200 | head -20
+          echo "--- then one server test:"
+          timeout 200 python3 -m unittest -v tests/scripts/test_pb.py -k test_up_twice_is_idempotent 2>&1 | tail -8
+        continue-on-error: true

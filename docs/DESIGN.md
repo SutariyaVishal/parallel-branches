@@ -31,6 +31,8 @@ What none of them did, as far as I found: read an unknown repository, work out h
 
 **Safety.** Process groups, not PIDs, are stopped, only those the tool started, and a recorded start time must still match, so a reused PID is never killed. A health check requires that the process on the port belongs to the group that was started (POSIX with `lsof`). `clean` is a dry run without `--yes`, skips worktrees with uncommitted work unless forced, and never removes a worktree it did not create. A dry run takes no lock and writes nothing.
 
+**Hooks** (`hooks.py`) run shell commands at five points: `post_create`, `pre_start`, `post_start`, `pre_stop`, `post_remove`. The comparison that shaped them is Worktrunk's hook system (ten hooks, TOML, a `hash_port` filter, approval on first run). Worktrunk's `hash_port` derives a number from the branch name; ours receives the port that was probed and allocated, plus every other service's URL, and `post_start` waits for the health check. Teardown hooks run the commands stored with the branch when it started, which gives the effect of Worktrunk's re-approval without an approval store: what was shown in the dry run is what runs later. Substituted values are shell-quoted because branch names may contain `$`, parentheses and backticks. Failures follow what can be undone: before anything starts, abort; after, report and carry on, so a broken hook never traps a branch running or on disk. Not built, on purpose: commit and merge hooks (no merge workflow here), concurrent hook tables, user-level config, an approval store. The config stays JSON because TOML needs Python 3.11 and we support 3.9.
+
 **The dev-mode browser** exists because CORS is the most common thing that breaks when the same app moves to another port. It uses a new empty profile (Chrome ignores `--disable-web-security` without a non-default `--user-data-dir`, which is also the safety property), opens one `localhost` URL, and exposes a DevTools port an agent can attach to. It does not fix OAuth/OIDC redirect URI mismatches, `Origin` or CSRF checks, or cookie rules, and the docs say so.
 
 **Cross-service wiring.** `{url.NAME}` and `{ports.NAME}` are filled in after every service's port has been chosen, so wiring works in either start order.
@@ -64,6 +66,7 @@ Caveats: small samples; the graders were adjusted after reading agent output, so
 - MIT licence.
 - No framework-, auth-provider- or company-specific code or defaults. Auth problems are reported generically.
 - Services are configured in `.parallel-branches.json`; monorepo layouts are only suggested (`pb init`), never applied without `--write`.
+- Hooks: five events, shell-quoted variables, stored commands for teardown, no approval store (the dry run is the approval).
 
 ## Known gaps
 
@@ -72,5 +75,8 @@ Caveats: small samples; the graders were adjusted after reading agent output, so
 - Windows stops a service by force-killing its process tree and skips the port-owner check.
 - Chrome versions other than 156 were not tried with the dev-mode browser.
 - Not detected: Docker Compose, Rust, .NET, PHP (use `--cmd`).
-- `status` does not show per-service logs.
+- `status` does not show per-service logs, or hook results (only `status --json` does, under `hook_runs`).
+- Hooks have no concurrent form and no user-level config. `restart` runs none.
+- A config committed on a branch can only be read after its worktree exists, so a mistake in it (hooks or services) is reported after the worktree was created and the worktree is not tracked for `clean`. The dry run reads the main checkout's config first.
+- The evals were last run before hooks existed, and have no hook scenario.
 - The evals have not been run against models other than Claude's.

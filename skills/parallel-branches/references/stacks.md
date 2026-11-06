@@ -67,6 +67,8 @@ Optional, at the repository root. The worktree's copy wins over the main checkou
 | `env` | Extra environment variables. Values may use `{PORT}` and `{HMR_PORT}`. |
 | `health_path` | Path requested during the health check. Default `/`. |
 | `copy` | Extra glob patterns of git-ignored files to copy into new worktrees. |
+| `hooks` | Commands run at fixed points of a branch's life. See `hooks.md`. |
+| `hook_timeout` | Seconds allowed per hook command. Default 120. |
 | `services` | Several processes for one branch. See below. When present, the top-level `cmd`, `install`, `env` and `health_path` are not used for starting. |
 
 These strings run in a shell. Read a repository's config before running it, the same way you would read its `package.json` scripts.

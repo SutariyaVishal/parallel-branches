@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.0
+- Lifecycle hooks: `hooks` in `.parallel-branches.json` with `post_create`, `pre_start`, `post_start`, `pre_stop` and `post_remove`. Commands may use `{branch}`, `{db_name}`, `{PORT}`, `{url.NAME}` and more (shell-quoted), and get the same values as `PB_*` environment variables. `post_create` and `pre_start` failures stop `up`; the others only report. Per-command timeout (`hook_timeout`, `up --hook-timeout`), one log per event, `--no-hooks` on `up`, `down` and `clean`.
+- `up --dry-run` prints every hook with its values filled in. `clean` without `--yes` lists the `post_remove` commands. `down` and `clean` run the commands stored when the branch started, not the current config.
+- Install now finishes for every service before the first one starts, so `pre_start` sits between the two.
+- Docs: Playwright MCP attached with `--cdp-endpoint` is verified (0.0.84). Demo GIF. `CODEOWNERS` and branch and tag rulesets, to apply once the repo is public.
+
 ## 0.5.4
 - Docs for a public release: rewritten README (real example session, comparison with other tools, limits), `docs/DESIGN.md` replaces the working plan, `SECURITY.md`, issue and pull-request templates.
 

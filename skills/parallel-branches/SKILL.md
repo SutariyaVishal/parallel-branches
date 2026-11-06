@@ -15,7 +15,7 @@ For each branch it creates a git worktree, copies or installs dependencies, pick
 
 ## Workflow
 
-1. **Plan first, then stop and ask.** Run `PB up <branch> [<branch>...] --dry-run --json`. It shows, per branch, the detected stack, the exact start command, the install plan and the port. Show these to the user, and say that a repository can supply its own commands through `.parallel-branches.json`, so the commands deserve a read. Then end your turn with the question. Do not run `PB up` without `--dry-run` in the same turn. A request like "get these running" is not approval of the commands; only a reply to your plan, or a message that explicitly says to go ahead with whatever plan you propose, is.
+1. **Plan first, then stop and ask.** Run `PB up <branch> [<branch>...] --dry-run --json`. It shows, per branch, the detected stack, the exact start command, the install plan and the port. Show these to the user, including every line that starts `hook <event>:`, and say that a repository can supply its own commands and hooks through `.parallel-branches.json`, so they deserve a read. Then end your turn with the question. Do not run `PB up` without `--dry-run` in the same turn. A request like "get these running" is not approval of the commands; only a reply to your plan, or a message that explicitly says to go ahead with whatever plan you propose, is.
 2. **Start.** Run `PB up <branch> [<branch>...]`. Add `--cmd '<command with {PORT}>'` when detection found nothing or the user wants a specific command. Add `--create` only if the user wants a new branch made from HEAD.
 3. **Report.** Give the user one URL per branch. Quote any `WARNING` lines. Say how many servers are running; more than three or four will strain a laptop.
 4. **CORS.** If the output says `CORS risk found`, or the user reports CORS errors, run `PB browser <branch>`. It opens a throwaway Chrome profile with web security off. Tell the user that web security is off in that window and that it only opens the app's own localhost URL.
@@ -36,15 +36,25 @@ Some branches need more than one process, such as a web front end plus an API. T
 - To pick up a code or config change in one service, use `PB restart BRANCH SERVICE`. It keeps the port, so URLs and `{url.NAME}` references stay valid.
 - If `up` says the project looks like a monorepo, run `PB init`, show the user the suggested services and notes, and ask before `PB init --write`. It guesses commands from each app's stack and does not guess `depends_on` or which app calls which, so ask the user about those.
 
+## Hooks
+
+A repository can run its own commands at fixed points through `hooks` in `.parallel-branches.json`: `post_create`, `pre_start`, `post_start`, `pre_stop`, `post_remove`. They are how a branch gets its own database or seed data. See `references/hooks.md`.
+
+- `PB up --dry-run` prints each hook with its ports and names filled in (`hook post_start: ...`). They run in a shell, so show them to the user as part of the plan and wait for approval, like start commands.
+- `post_create` and `pre_start` failing stops `up` before any server starts. `post_start`, `pre_stop` and `post_remove` failing is only reported (`WARNING hook ...`), and the branch still starts, stops or is removed.
+- `down` and `clean` run the commands stored when the branch was started, not the current file. `PB clean` without `--yes` lists the `post_remove` commands it would run. Mention them when you ask before `PB clean --yes`.
+- `--no-hooks` on `up`, `down` or `clean` skips them. Use it if the user does not trust the repository's hooks. `up --hook-timeout N` changes the per-command limit.
+- `restart` runs no hooks.
+
 ## Commands
 
 | Command | Purpose |
 |---|---|
-| `PB up BRANCH... [--cmd CMD] [--dry-run] [--no-install] [--browser] [--json]` | Create worktrees, install, start, health-check |
+| `PB up BRANCH... [--cmd CMD] [--dry-run] [--no-install] [--no-hooks] [--browser] [--json]` | Create worktrees, install, start, health-check |
 | `PB status [--json]` | Show branches, URLs, health, dev-browser endpoints |
 | `PB browser BRANCH [--path /x] [--headless]` | Open a dev-mode browser for a running branch |
-| `PB down BRANCH...` or `--all` | Stop only the processes this tool started, and close their dev browsers |
-| `PB clean [--yes] [--force]` | Remove worktrees this tool created. Dry run without `--yes` |
+| `PB down BRANCH...` or `--all` `[--no-hooks]` | Stop only the processes this tool started, and close their dev browsers |
+| `PB clean [--yes] [--force] [--no-hooks]` | Remove worktrees this tool created. Dry run without `--yes` |
 | `PB restart BRANCH [SERVICE]` | Restart one service, or all of them, on the same ports |
 | `PB init [--write]` | Suggest a `services` config for a monorepo. Printing writes nothing |
 | `PB detect [PATH]` | Show the detected stack, config, install plan and any monorepo suggestion |
@@ -62,6 +72,7 @@ Some branches need more than one process, such as a web front end plus an API. T
 ## Rules
 
 - Never start servers (`PB up` without `--dry-run`) before the user has approved the plan you showed. The commands come from the repository and run in a shell on their machine.
+- Never run `PB down`, `PB clean --yes` or `PB up` with hooks the user has not seen. Teardown hooks run commands stored from the repository config.
 - Never kill a process this tool did not start. `down` checks a recorded start time before killing, and refuses if the PID was reused.
 - Never open the user's real browser profile with web security off. Only `PB browser` does this, and it always uses an empty throwaway profile.
 - Do not use `clean --force` without telling the user it removes uncommitted work.
@@ -69,10 +80,11 @@ Some branches need more than one process, such as a web front end plus an API. T
 
 ## Attaching a browser agent
 
-`PB browser` prints a DevTools endpoint such as `http://127.0.0.1:9222`. A Playwright-based agent can attach to it over CDP. The Claude in Chrome extension drives the user's own profile and cannot use this endpoint. Playwright MCP takes its endpoint when it starts, so attaching it to this browser means starting it with `--cdp-endpoint` (not tested here).
+`PB browser` prints a DevTools endpoint such as `http://127.0.0.1:9222`. A Playwright-based agent can attach to it over CDP. The Claude in Chrome extension drives the user's own profile and cannot use this endpoint. Playwright MCP takes its endpoint when it starts, so attaching it to this browser means starting it with `--cdp-endpoint` (tested with `@playwright/mcp` 0.0.84).
 
 ## More detail
 
 - `references/stacks.md`: supported stacks, install rules and the `.parallel-branches.json` format.
+- `references/hooks.md`: hook events, variables, failure rules and the trust model.
 - `references/browser-dev-mode.md`: what the dev-mode browser fixes and what it cannot.
 - `references/safety.md`: what the tool touches and what to be careful about.

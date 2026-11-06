@@ -8,7 +8,7 @@ Run several git branches side by side, each with its own dev server on its own p
 
 It is an [agent skill](https://agentskills.io) (for Claude Code, Codex, Gemini CLI, Cursor and others that read `SKILL.md`) built around one dependency-free Python script, `pb.py`. You can also use the script on its own.
 
-> **Status: beta (v0.5.4).** Tested in CI on Linux, macOS and Windows with Python 3.9 and newer. Port handling was measured against real Vite, Flask and plain Node servers; the other stacks follow each tool's documentation. See [Limits](#limits).
+> **Status: beta (v0.6.0).** Tested in CI on Linux, macOS and Windows with Python 3.9 and newer. Port handling was measured against real Vite, Flask and plain Node servers; the other stacks follow each tool's documentation. See [Limits](#limits).
 
 ## The problem
 
@@ -23,7 +23,8 @@ For each branch you name, `pb`:
 3. copies your git-ignored `.env` files over,
 4. picks a free, stable port per branch,
 5. starts the dev server detached, and waits until it really answers,
-6. prints one URL per branch, with warnings about hardcoded ports and URLs that will break on a new port.
+6. prints one URL per branch, with warnings about hardcoded ports and URLs that will break on a new port,
+7. runs your [hooks](#hooks) at each step, for things like a per-branch database.
 
 It stops only the processes it started, refuses to delete worktrees that have uncommitted work, and can open a throwaway browser profile with web security off when CORS is in your way.
 
@@ -84,11 +85,11 @@ When detection finds nothing, or guesses wrong, say what to run: `pb up feature-
 
 | Command | What it does |
 |---|---|
-| `pb up BRANCH... [--dry-run] [--cmd CMD] [--no-install] [--browser]` | Create worktrees, install, start, health-check |
+| `pb up BRANCH... [--dry-run] [--cmd CMD] [--no-install] [--no-hooks] [--browser]` | Create worktrees, install, start, health-check |
 | `pb status [--json]` | Branches, URLs, health, dev-browser endpoints |
 | `pb restart BRANCH [SERVICE]` | Restart one service or all of them, on the same ports |
-| `pb down BRANCH...` or `--all` | Stop what `pb` started, and close its dev browsers |
-| `pb clean [--yes] [--force]` | Remove worktrees `pb` created. A dry run unless `--yes` |
+| `pb down BRANCH...` or `--all` | Stop what `pb` started, and close its dev browsers. `--no-hooks` skips `pre_stop` |
+| `pb clean [--yes] [--force]` | Remove worktrees `pb` created. A dry run unless `--yes`. `--no-hooks` skips `post_remove` |
 | `pb browser BRANCH` | Open a dev-mode browser (web security off, throwaway profile) |
 | `pb init [--write]` | Suggest a `services` config for a monorepo |
 | `pb detect [PATH]` | Show the detected stack, install plan and any monorepo suggestion |
@@ -117,6 +118,32 @@ A branch can need more than one process. Describe them in `.parallel-branches.js
 
 Every service gets its own port; `{url.api}` and `{ports.api}` become the other service's address; services start in dependency order, and if one fails the others are stopped. In a monorepo, `pb init` suggests this file from your workspaces or folder layout and writes nothing unless you pass `--write`.
 
+## Hooks
+
+Run your own commands at fixed points: create a database when the worktree appears, seed it once the API answers, drop it when the worktree goes.
+
+```json
+{
+  "hooks": {
+    "post_create": "createdb {db_name}",
+    "post_start": "curl -fsS -X POST {url.api}/seed",
+    "post_remove": "dropdb --if-exists {db_name}"
+  }
+}
+```
+
+Five events: `post_create` (new worktree, before install), `pre_start` (before any service starts), `post_start` (every service healthy), `pre_stop` (`down`, services still up) and `post_remove` (`clean --yes`). A failing `post_create` or `pre_start` stops `up`; a failing `post_start`, `pre_stop` or `post_remove` is reported and never keeps a branch from starting, stopping or being removed.
+
+What sets this apart from a plain "run a command" hook:
+
+- Hooks see the ports that were actually allocated, as `{PORT}`, `{url.api}` and `PB_PORT_API`, not a number derived from the branch name.
+- `post_start` runs only after the health checks pass.
+- Values are shell-quoted, so a branch named `a$(touch${IFS}pwned)`, which git accepts, cannot run anything.
+- `up --dry-run` prints every hook with values filled in. `down` and `clean` run the commands stored when the branch started, not whatever the config says later.
+- Each command has a timeout and a log file.
+
+Full reference: [`skills/parallel-branches/references/hooks.md`](skills/parallel-branches/references/hooks.md). `parallel-branches` has no commit or merge hooks; it does not commit or merge.
+
 ## The dev-mode browser, and what it cannot fix
 
 `pb browser BRANCH` opens Chrome or Chromium with a **new empty profile** and `--disable-web-security`, on that branch's own `localhost` URL, and prints a DevTools endpoint a browser agent can attach to. `pb down` closes it and deletes the profile.
@@ -144,7 +171,7 @@ This space has good tools, and you may prefer one of them:
 - Only process groups that `pb` started are stopped, and a recorded start time must still match, so a reused PID is never killed.
 - `clean` is a dry run without `--yes`, skips running servers, and skips worktrees with uncommitted changes unless you pass `--force`.
 - Branch names starting with `-` are rejected, git is called with argument lists, and state is written under a file lock.
-- Commands in `.parallel-branches.json` and in `package.json` run in a shell. Treat an unfamiliar repository the way you would before running `npm run dev` in it.
+- Commands in `.parallel-branches.json` (start commands and hooks) and in `package.json` run in a shell. Treat an unfamiliar repository the way you would before running `npm run dev` in it.
 
 More in [`skills/parallel-branches/references/safety.md`](skills/parallel-branches/references/safety.md). To report a vulnerability, see [SECURITY.md](SECURITY.md).
 

@@ -24,6 +24,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import devbrowser  # noqa: E402
+import hooks  # noqa: E402
 import procs  # noqa: E402
 import stacks  # noqa: E402
 from procs import group_alive, listener_pgids, process_token, reap, stop_group  # noqa: E402,F401
@@ -400,6 +401,27 @@ def branch_lock_hash(repo, branch, main):
     return stacks.digest_bytes(proc.stdout) if proc.returncode == 0 else None
 
 
+def run_hook(entry, event, main, state_dir, results):
+    """Run the commands stored on a branch's registry entry for `event`.
+
+    Returns a result dict (also appended to `results`), or None when the branch has no such hook.
+    The commands were read from the config when the branch was started, so what gets run at
+    teardown is what was shown in that dry run, even if the config file has changed since.
+    """
+    commands = (entry.get("hooks") or {}).get(event)
+    if not commands:
+        return None
+    slug = slugify(entry["branch"])
+    log_path = os.path.join(state_dir, "logs", "%s.hook-%s.log" % (slug, event))
+    cwd = main if event == "post_remove" or not os.path.isdir(entry["path"]) else entry["path"]
+    ok, detail = hooks.run(event, commands, hooks.context_from_entry(entry, main, slug), cwd, log_path,
+                           entry.get("hook_timeout") or hooks.DEFAULT_TIMEOUT)
+    result = {"event": event, "ok": ok, "detail": detail, "log": log_path}
+    entry.setdefault("hook_runs", {})[event] = {"ok": ok, "log": log_path, "at": int(time.time())}
+    results.append(result)
+    return result
+
+
 def up_one(args, state, state_dir, main, base_dir, branch):
     """Start one branch: its worktree and every service. Returns (result_row, failed)."""
     existing = state["branches"].get(branch)
@@ -408,12 +430,12 @@ def up_one(args, state, state_dir, main, base_dir, branch):
     if existing and any_running(existing):
         stop_records(existing)  # only some services were alive: start over cleanly
     known = worktree_path_for(args.repo, branch)
-    created = False
+    created = new_now = False
     if args.dry_run:
         path = known or main
     else:
-        path, created = ensure_worktree(args.repo, main, branch, base_dir, args.create)
-        created = created or bool(existing and existing.get("created_worktree"))
+        path, new_now = ensure_worktree(args.repo, main, branch, base_dir, args.create)
+        created = new_now or bool(existing and existing.get("created_worktree"))
     repo_cfg = stacks.load_config(path, main)
     services, primary, ports = plan_services(args, repo_cfg, branch, state)
     multi = services[0]["name"] is not None
@@ -428,6 +450,13 @@ def up_one(args, state, state_dir, main, base_dir, branch):
                                     cfg=svc if multi else repo_cfg, from_cli=not multi)
         prepared.append((svc, svc_dir, settings))
     primary_name = primary if multi else None
+    try:
+        hook_cmds, hook_timeout = hooks.parse(repo_cfg, {svc["name"] for svc in services if svc["name"]})
+    except ValueError as exc:
+        raise PbError("bad hooks in %s: %s" % (stacks.CONFIG_NAME, exc))
+    hook_timeout = args.hook_timeout or hook_timeout
+    if args.no_hooks:
+        hook_cmds = {}
 
     if args.dry_run:
         rows = []
@@ -450,6 +479,10 @@ def up_one(args, state, state_dir, main, base_dir, branch):
                        + ("" if known else " (stack and warnings read from the main checkout)")}
         if multi:
             row["services"] = rows
+        if hook_cmds:
+            where = known or os.path.join(base_dir, slugify(branch))
+            row["hook_preview"] = hooks.preview(hook_cmds, hooks.context(branch, slugify(branch), where, main,
+                                                                  ports, primary_name))
         return row, False
 
     log_dir = os.path.join(state_dir, "logs")
@@ -459,6 +492,8 @@ def up_one(args, state, state_dir, main, base_dir, branch):
              "status": "failed", "extras": []}
     if multi:
         entry["service_order"] = [svc["name"] for svc, _, _ in prepared]
+    if hook_cmds:
+        entry["hooks"], entry["hook_timeout"] = hook_cmds, hook_timeout
     recs = {}
     for svc, svc_dir, st in prepared:
         name = svc["name"]
@@ -490,21 +525,45 @@ def up_one(args, state, state_dir, main, base_dir, branch):
                                       "auth": False})
             entry["cors_risk"] = True
 
+    hook_results = []
+
+    def stopped_by_hook(event):
+        """(row, failed) when a blocking hook failed and the branch must not start, else None."""
+        res = run_hook(entry, event, main, state_dir, hook_results)
+        if not res or res["ok"]:
+            return None
+        stop_records(entry)
+        entry["status"] = "failed"
+        for extra in entry["extras"]:
+            extra["status"] = "failed"
+        save()
+        return dict(entry, hook_results=hook_results,
+                    note="FAILED: hook %s: %s\n%s" % (event, res["detail"], tail(res["log"]))), True
+
+    stopped = stopped_by_hook("post_create") if new_now else None
+    if stopped:
+        return stopped
+    for svc, svc_dir, st in prepared:
+        name = svc["name"]
+        if st["install"]:
+            install_log = os.path.join(log_dir, slug + ("." + name if name else "") + ".install.log")
+            ok, note = stacks.run_install(st["install"], svc_dir, install_log, args.install_timeout)
+            recs[name]["install"] = note
+            if not ok:
+                stop_records(entry)
+                entry["status"] = "failed"
+                save()
+                return dict(entry, note="FAILED%s: %s" % (" (service %s)" % name if multi else "", note)), True
+    stopped = stopped_by_hook("pre_start")
+    if stopped:
+        return stopped
+
     primary_detail = ""
     for svc, svc_dir, st in prepared:
         name = svc["name"]
         rec = recs[name]
         port, hmr = ports[name]
         where = " (service %s)" % name if multi else ""
-        if st["install"]:
-            install_log = os.path.join(log_dir, slug + ("." + name if name else "") + ".install.log")
-            ok, note = stacks.run_install(st["install"], svc_dir, install_log, args.install_timeout)
-            rec["install"] = note
-            if not ok:
-                stop_records(entry)
-                entry["status"] = "failed"
-                save()
-                return dict(entry, note="FAILED%s: %s" % (where, note)), True
         cmd = stacks.render(st["template"], port, hmr, svc_dir, port_map)
         extra_env = {key: stacks.render(str(value), port, hmr, svc_dir, port_map) for key, value in st["env"].items()}
         env = dict(os.environ, PORT=str(port), HMR_PORT=str(hmr), BROWSER="none")
@@ -528,8 +587,12 @@ def up_one(args, state, state_dir, main, base_dir, branch):
     entry["status"] = "running"
     for rec in all_records(entry):
         rec["healthy"] = True
+    note = primary_detail
+    post = run_hook(entry, "post_start", main, state_dir, hook_results)
+    if post and not post["ok"]:  # the servers are up and stay up; only report it
+        note += "\nWARNING: hook post_start failed: %s (log %s)" % (post["detail"], post["log"])
     save()
-    return dict(entry, note=primary_detail), False
+    return dict(entry, note=note, hook_results=hook_results), False
 
 
 def cmd_up(args):
@@ -771,8 +834,16 @@ def cmd_status(args):
     return 0
 
 
+def report_hook(label, result):
+    if result["ok"]:
+        print("%s: hook %s ok (%s)" % (label, result["event"], result["detail"]))
+    else:
+        print("%s: WARNING hook %s failed: %s (log %s)" % (label, result["event"], result["detail"],
+                                                          result["log"]))
+
+
 def cmd_down(args):
-    _, state_dir = repo_info(args.repo)
+    main, state_dir = repo_info(args.repo)
     with locked(state_dir):
         state = load_state(state_dir)
         names = sorted(state["branches"]) if args.all else args.branches
@@ -785,6 +856,10 @@ def cmd_down(args):
                 continue
             records = [(branch + (":" + entry["service"] if entry.get("service") else ""), entry)]
             records += [("%s:%s" % (branch, rec["service"]), rec) for rec in reversed(entry.get("extras") or [])]
+            if not args.no_hooks and any(entry_owns_process(rec) for _, rec in records):
+                results = []  # a failing hook is reported, and the services are stopped regardless
+                if run_hook(entry, "pre_stop", main, state_dir, results):
+                    report_hook(branch, results[0])
             stuck = False
             for label, rec in records:
                 if not entry_owns_process(rec):
@@ -822,8 +897,11 @@ def cmd_clean(args):
                 state["branches"].pop(branch)
                 continue
             path = entry["path"]
+            results = []
             if not os.path.isdir(path):
                 print("%s: worktree already gone, dropping entry" % branch)
+                if args.yes and not args.no_hooks and run_hook(entry, "post_remove", main, state_dir, results):
+                    report_hook(branch, results[0])
                 state["branches"].pop(branch)
                 continue
             dirty = git(path, "status", "--porcelain").stdout.strip()
@@ -832,12 +910,18 @@ def cmd_clean(args):
                 continue
             if not args.yes:
                 print("%s: would remove worktree %s (rerun with --yes)" % (branch, path))
+                if not args.no_hooks:
+                    ctx = hooks.context_from_entry(entry, main, slugify(branch))
+                    for text in (entry.get("hooks") or {}).get("post_remove", []):
+                        print("%s: would then run hook post_remove: %s" % (branch, hooks.render(text, ctx)))
                 continue
             if args.force:
                 git(main, "worktree", "remove", "--force", path)
             else:
                 git(main, "worktree", "remove", path)
             print("%s: removed worktree %s" % (branch, path))
+            if not args.no_hooks and run_hook(entry, "post_remove", main, state_dir, results):
+                report_hook(branch, results[0])
             state["branches"].pop(branch)
         save_state(state_dir, state)
     return 0
@@ -862,6 +946,11 @@ def print_results(results, as_json):
     table(rows)
     for r in results:
         name = r["branch"]
+        for item in r.get("hook_preview") or []:  # dry run: what would run, with values filled in
+            for text in item["commands"]:
+                print("%s: hook %s: %s" % (name, item["event"], text))
+        for item in r.get("hook_results") or []:
+            report_hook(name, item)
         if r.get("stack"):
             print("%s: stack %s (%s confidence)" % (name, r["stack"], r.get("confidence", "?")))
         if r.get("cmd"):
@@ -921,6 +1010,9 @@ def build_parser():
                     help="run the --browser instance headless")
     up.add_argument("--no-verify-owner", action="store_true",
                     help="skip the check that our process owns the port (for servers that daemonize)")
+    up.add_argument("--no-hooks", action="store_true",
+                    help="do not run the hooks from the config (none are stored for teardown either)")
+    up.add_argument("--hook-timeout", type=int, help="seconds allowed per hook command (default: config or 120)")
     up.add_argument("--dry-run", action="store_true", help="show ports and commands, start nothing")
     up.add_argument("--json", action="store_true")
     up.set_defaults(func=cmd_up)
@@ -957,11 +1049,13 @@ def build_parser():
     down = sub.add_parser("down", help="stop the servers this tool started")
     down.add_argument("branches", nargs="*")
     down.add_argument("--all", action="store_true")
+    down.add_argument("--no-hooks", action="store_true", help="do not run the pre_stop hook")
     down.set_defaults(func=cmd_down)
 
     clean = sub.add_parser("clean", help="remove worktrees this tool created (dry run unless --yes)")
     clean.add_argument("--yes", action="store_true", help="actually remove")
     clean.add_argument("--force", action="store_true", help="also remove worktrees with uncommitted changes")
+    clean.add_argument("--no-hooks", action="store_true", help="do not run the post_remove hook")
     clean.set_defaults(func=cmd_clean)
     return parser
 

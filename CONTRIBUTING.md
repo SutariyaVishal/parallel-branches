@@ -39,3 +39,15 @@ A new behavior in `SKILL.md` should come with a scenario that fails without it.
 - Keep changes focused, and update `references/` and `SKILL.md` if behavior changes.
 - Add a line to `CHANGELOG.md`.
 - Do not add runtime dependencies. If you need one, open an issue first.
+- Nobody pushes to `main` directly. Every change goes through a pull request that the maintainer approves and merges.
+
+## Maintainer setup
+
+The rules that enforce this live in `.github/rulesets/` and `.github/CODEOWNERS`. Rulesets need a public repository (or GitHub Pro on a private one), so apply them once, after the repository is public:
+
+```
+gh api repos/OWNER/REPO/rulesets --method POST --input .github/rulesets/protect-main.json
+gh api repos/OWNER/REPO/rulesets --method POST --input .github/rulesets/protect-tags.json
+```
+
+`protect-main` blocks deletion and force pushes, requires a pull request with one approval from a code owner, resolved review threads, and every CI check passing on an up-to-date branch. Only the repository admin role can bypass it, and only through a pull request, so even the maintainer cannot push straight to `main`. `protect-tags` stops anyone else from creating, moving or deleting release tags. Also set, under Settings → Actions → General, "Require approval for all outside collaborators" for workflow runs from forks, and keep the default `GITHUB_TOKEN` permission read-only.

@@ -41,7 +41,9 @@ It stops only the processes it started, refuses to delete worktrees that have un
 
 ## Quick start
 
-A real session, with paths shortened. The project is a Node app whose `dev` script reads `PORT`.
+![Two branches started, listed, stopped and cleaned up](docs/demo.gif)
+
+The animation replays real `pb` output from a two-branch run (typing and pauses are added). Below is the same kind of session as text, with paths shortened. The project is a Node app whose `dev` script reads `PORT`.
 
 ```
 $ pb up feature-login fix-checkout --dry-run

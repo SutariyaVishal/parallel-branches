@@ -75,5 +75,6 @@ Output goes to `.git/parallel-branches/logs/<branch_slug>.hook-<event>.log`. `st
 
 - Commands in one list run one after another. There is no concurrent form.
 - A hook that starts a background process and leaves it running is not tracked or stopped by `down`. Use a `services` entry for processes that should live as long as the branch.
+- Removing a worktree with `git worktree remove` instead of `pb clean` runs no hooks, so `pre_remove` and `post_remove` never fire.
 - Hooks come from the repository config only. There is no user-level config file.
 - A config committed on the branch can only be read once its worktree exists. A mistake in `hooks` there is reported after the worktree was created. `--dry-run` reads the main checkout's config and catches it first.

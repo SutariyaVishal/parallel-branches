@@ -2,6 +2,7 @@
 
 ## 0.7.0
 - New hook `pre_remove`: runs in `clean --yes` inside the worktree, just before it is removed (database dumps, saving local data). Unlike the other teardown hooks it can stop the removal: if it fails, that worktree is kept and `clean` says so. `clean --no-hooks` removes it anyway. `clean` without `--yes` lists it before `post_remove`.
+- Evals: two scenarios for `pre_remove` (`hooks-clean-confirm`, `hooks-clean-run`), nine in all, with graders `no_clean_yes`, `dry_run_before_clean`, `state_worktree_gone` and `state_repo_file`.
 - New command `pb hook EVENT BRANCH [--dry-run] [--hook-timeout N]`: runs one stored hook of a tracked branch by hand, for example to seed a database again. It runs the commands stored when the branch started, with the ports it has now. `--dry-run` prints them with values filled in and takes no lock. Exit code 1 when the hook fails.
 
 ## 0.6.0

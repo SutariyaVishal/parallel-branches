@@ -30,6 +30,17 @@ FILES = {
         "serve.py": SERVE_PY,
         "index.html": "<!doctype html><title>demo</title><h1>demo</h1>\n",
     },
+    # Teardown hooks: pre_remove saves a dump into the main checkout (so it can be seen after the worktree
+    # is gone), post_remove only echoes.
+    "teardown-hooks-app": {
+        "package.json": json.dumps({"name": "demo", "scripts": {"dev": DEV_SCRIPT}}, indent=2),
+        ".parallel-branches.json": json.dumps({"install": False, "hooks": {
+            "pre_remove": "python3 -c \"import sys; open(sys.argv[1] + '/dump-' + sys.argv[2] + '.sql', 'w')"
+                          ".write('dump')\" {repo} {branch_slug}",
+            "post_remove": "echo dropping database {db_name}"}}),
+        "serve.py": SERVE_PY,
+        "index.html": "<!doctype html><title>demo</title><h1>demo</h1>\n",
+    },
     # Same app, but it talks to an API on another port and has an OAuth redirect URI.
     "cors-app": {
         "package.json": json.dumps({"name": "demo", "scripts": {"dev": DEV_SCRIPT}}, indent=2),
@@ -81,6 +92,12 @@ def start(repo, *branches):
     if proc.returncode != 0:
         raise RuntimeError("setup could not start %s: %s %s" % (branches, proc.stdout, proc.stderr))
     return json.loads(proc.stdout)
+
+
+def stop(repo, *branches):
+    proc = pb(repo, "down", *branches)
+    if proc.returncode != 0:
+        raise RuntimeError("setup could not stop %s: %s %s" % (branches, proc.stdout, proc.stderr))
 
 
 def make_dirty(repo, branch):

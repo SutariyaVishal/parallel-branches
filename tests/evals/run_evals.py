@@ -59,6 +59,8 @@ def prepare(scenario, root):
     for step in scenario.get("setup", []):
         if "start" in step:
             fixtures.start(repo, *step["start"])
+        if "stop" in step:
+            fixtures.stop(repo, *step["stop"])
         if "dirty" in step:
             fixtures.make_dirty(repo, step["dirty"])
     return repo
@@ -78,7 +80,7 @@ def collect_state(repo):
             extra["http_ok"] = extra["live"] in ("healthy", "unhealthy") and graders.http_ok(extra["port"])
         branches[row["branch"]] = row
     dirty = fixtures.git(repo, "status", "--porcelain", "--untracked-files=no").strip()
-    return {"branches": branches, "repo_clean": not dirty}
+    return {"branches": branches, "repo_clean": not dirty, "repo_files": sorted(os.listdir(repo))}
 
 
 def claude_command(args, model, prompt, root="/<tmp>"):

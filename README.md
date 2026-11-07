@@ -6,7 +6,7 @@
 
 Run several git branches side by side, each with its own dev server on its own port, so you can compare them in the browser without stashing, switching and restarting.
 
-It is an [agent skill](https://agentskills.io) (for Claude Code, Codex, Gemini CLI, Cursor and others that read `SKILL.md`) built around one dependency-free Python script, `pb.py`. You can also use the script on its own.
+It is an [agent skill](https://agentskills.io) in the open `SKILL.md` format, built around one dependency-free Python script, `pb.py`. It has only been tried with Claude Code. Other agents that read `SKILL.md` (Codex, Gemini CLI, Cursor and others) should be able to use it, but that is untested. You can also use the script on its own.
 
 > **Status: beta (v0.7.0).** Tested in CI on Linux, macOS and Windows with Python 3.9 and newer. Port handling was measured against real Vite, Flask and plain Node servers; the other stacks follow each tool's documentation. See [Limits](#limits).
 
@@ -36,7 +36,7 @@ It stops only the processes it started, refuses to delete worktrees that have un
 /plugin install parallel-branches --marketplace SutariyaVishal/parallel-branches
 ```
 
-**Other agents that read `SKILL.md`:** copy `skills/parallel-branches` into `.agents/skills/` (project) or `~/.agents/skills/` (user).
+**Other agents that read `SKILL.md` (untested):** copy `skills/parallel-branches` into `.agents/skills/` (project) or `~/.agents/skills/` (user).
 
 **Just the script:** `skills/parallel-branches/scripts/pb.py`. It needs git and Python 3.9 or newer, nothing else. In the examples below, `pb` stands for `python3 /path/to/skills/parallel-branches/scripts/pb.py`, run inside your repository.
 
@@ -44,7 +44,9 @@ It stops only the processes it started, refuses to delete worktrees that have un
 
 ![Two branches started, listed, stopped and cleaned up](docs/demo.gif)
 
-The animation replays real `pb` output from a two-branch run (typing and pauses are added). Below is the same kind of session as text, with paths shortened. The project is a Node app whose `dev` script reads `PORT`.
+With an agent, ask in plain words: *"run feature-login and fix-checkout side by side"*. It shows you the plan (a dry run) and waits for your OK before it starts anything. By hand, it looks like this.
+
+The animation replays real `pb` output from a two-branch run (typing and pauses are added) and starts at `pb up`. Below is the same session as text, with paths shortened and the dry run first, which is where you should always begin. The project is a Node app whose `dev` script reads `PORT`.
 
 ```
 $ pb up feature-login fix-checkout --dry-run
@@ -58,15 +60,23 @@ feature-login: dry run, nothing started (stack and warnings read from the main c
 
 $ pb up feature-login fix-checkout
 BRANCH         URL                    PORT  PID    PATH
-feature-login  http://localhost:4403  4403  86641  ~/code/myapp.worktrees/feature-login
-fix-checkout   http://localhost:4174  4174  86686  ~/code/myapp.worktrees/fix-checkout
+feature-login  http://localhost:4403  4403  91214  ~/code/myapp.worktrees/feature-login
+fix-checkout   http://localhost:4174  4174  91266  ~/code/myapp.worktrees/fix-checkout
+feature-login: stack node (low confidence)
+feature-login: command npm run dev
+feature-login: install: npm ci
 feature-login: HTTP 200
+feature-login: log ~/code/myapp/.git/parallel-branches/logs/feature-login.log
+fix-checkout: stack node (low confidence)
+fix-checkout: command npm run dev
+fix-checkout: install: npm ci
 fix-checkout: HTTP 200
+fix-checkout: log ~/code/myapp/.git/parallel-branches/logs/fix-checkout.log
 
 $ pb status
 BRANCH         URL                    STATUS   PID    DEV-BROWSER  PATH
-feature-login  http://localhost:4403  healthy  86641  -            ~/code/myapp.worktrees/feature-login
-fix-checkout   http://localhost:4174  healthy  86686  -            ~/code/myapp.worktrees/fix-checkout
+feature-login  http://localhost:4403  healthy  91214  -            ~/code/myapp.worktrees/feature-login
+fix-checkout   http://localhost:4174  healthy  91266  -            ~/code/myapp.worktrees/fix-checkout
 
 $ pb down --all
 feature-login: stopped (port 4403 free)
@@ -127,7 +137,7 @@ Run your own commands at fixed points: create a database when the worktree appea
 {
   "hooks": {
     "post_create": "createdb {db_name}",
-    "post_start": "curl -fsS -X POST {url.api}/seed",
+    "post_start": "curl -fsS -X POST {URL}/seed",
     "post_remove": "dropdb --if-exists {db_name}"
   }
 }
@@ -137,7 +147,7 @@ Six events: `post_create` (new worktree, before install), `pre_start` (before an
 
 What sets this apart from a plain "run a command" hook:
 
-- Hooks see the ports that were actually allocated, as `{PORT}`, `{url.api}` and `PB_PORT_API`, not a number derived from the branch name.
+- Hooks see the ports that were actually allocated, as `{PORT}`, `{URL}` (or `{url.api}` for a named service) and `PB_PORT`, not a number derived from the branch name.
 - `post_start` runs only after the health checks pass.
 - Values are shell-quoted, so a branch named `a$(touch${IFS}pwned)`, which git accepts, cannot run anything.
 - `up --dry-run` prints every hook with values filled in. `down` and `clean` run the commands stored when the branch started, not whatever the config says later.
@@ -162,7 +172,7 @@ Use that window only for the app it opened. With web security off, any site load
 
 This space has good tools, and you may prefer one of them:
 
-- [Worktrunk](https://github.com/max-sixty/worktrunk), [git-worktree-runner](https://github.com/coderabbitai/git-worktree-runner) and [gwq](https://github.com/d-kuro/gwq) manage worktrees well, with hooks and editor or agent integration, but you wire up the ports and dev servers yourself.
+- [Worktrunk](https://github.com/max-sixty/worktrunk), [git-worktree-runner](https://github.com/coderabbitai/git-worktree-runner) and [gwq](https://github.com/d-kuro/gwq) manage worktrees well, with hooks and editor or agent integration, but ports and dev servers are left to hooks you write.
 - [Portless](https://github.com/vercel-labs/portless) handles port allocation and a local proxy.
 - Claude Code's built-in worktrees and obra/superpowers' `using-git-worktrees` create worktrees (the latter also installs dependencies) but do not run dev servers.
 
@@ -190,7 +200,7 @@ More in [`skills/parallel-branches/references/safety.md`](skills/parallel-branch
 
 ```
 python3 tests/validate_skill.py                 # skill and manifest rules
-python3 -m unittest discover tests/scripts      # unit and CLI tests (about a minute)
+python3 -m unittest discover tests/scripts      # unit and CLI tests (about three minutes)
 ruff check .                                    # lint
 ```
 

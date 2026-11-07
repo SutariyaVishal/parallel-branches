@@ -6,7 +6,7 @@ Thanks for helping. This project is small on purpose: one script, no runtime dep
 
 ```
 python3 tests/validate_skill.py                 # skill + manifest rules
-python3 -m unittest discover tests/scripts      # unit and CLI tests (about a minute)
+python3 -m unittest discover tests/scripts      # unit and CLI tests (about three minutes)
 ruff check .                                    # lint (pip install ruff)
 ```
 

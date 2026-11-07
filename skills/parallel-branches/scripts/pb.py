@@ -450,13 +450,19 @@ def up_one(args, state, state_dir, main, base_dir, branch):
                                     cfg=svc if multi else repo_cfg, from_cli=not multi)
         prepared.append((svc, svc_dir, settings))
     primary_name = primary if multi else None
+    names = {svc["name"] for svc in services if svc["name"]}
     try:
-        hook_cmds, hook_timeout = hooks.parse(repo_cfg, {svc["name"] for svc in services if svc["name"]})
+        project_cmds, project_timeout = hooks.parse(repo_cfg, names)
     except ValueError as exc:
         raise PbError("bad hooks in %s: %s" % (stacks.CONFIG_NAME, exc))
-    hook_timeout = args.hook_timeout or hook_timeout
+    try:
+        user_cmds, user_timeout = hooks.parse(args.user_cfg, names)
+    except ValueError as exc:
+        raise PbError("bad hooks in %s: %s" % (args.user_cfg_path, exc))
+    hook_cmds, hook_sources = hooks.merge(user_cmds, project_cmds)  # user commands first
+    hook_timeout = args.hook_timeout or (project_timeout if "hook_timeout" in repo_cfg else user_timeout)
     if args.no_hooks:
-        hook_cmds = {}
+        hook_cmds, hook_sources = {}, None
 
     if args.dry_run:
         rows = []
@@ -482,7 +488,7 @@ def up_one(args, state, state_dir, main, base_dir, branch):
         if hook_cmds:
             where = known or os.path.join(base_dir, slugify(branch))
             row["hook_preview"] = hooks.preview(hook_cmds, hooks.context(branch, slugify(branch), where, main,
-                                                                  ports, primary_name))
+                                                                  ports, primary_name), hook_sources)
         return row, False
 
     log_dir = os.path.join(state_dir, "logs")
@@ -494,6 +500,8 @@ def up_one(args, state, state_dir, main, base_dir, branch):
         entry["service_order"] = [svc["name"] for svc, _, _ in prepared]
     if hook_cmds:
         entry["hooks"], entry["hook_timeout"] = hook_cmds, hook_timeout
+        if hook_sources:
+            entry["hook_sources"] = hook_sources
     recs = {}
     for svc, svc_dir, st in prepared:
         name = svc["name"]
@@ -597,6 +605,10 @@ def up_one(args, state, state_dir, main, base_dir, branch):
 
 def cmd_up(args):
     main, state_dir = repo_info(args.repo)
+    try:
+        args.user_cfg, args.user_cfg_path = hooks.load_user()  # a bad file stops everything before any worktree exists
+    except ValueError as exc:
+        raise PbError("bad user config: %s" % exc)
     base_dir = args.worktree_dir or default_worktree_dir(main)
     for branch in args.branches:
         check_branch_name(branch)
@@ -913,8 +925,10 @@ def cmd_clean(args):
                 if not args.no_hooks:
                     ctx = hooks.context_from_entry(entry, main, slugify(branch))
                     for event, when in (("pre_remove", "first"), ("post_remove", "then")):
-                        for text in (entry.get("hooks") or {}).get(event, []):
-                            print("%s: would %s run hook %s: %s" % (branch, when, event, hooks.render(text, ctx)))
+                        srcs = (entry.get("hook_sources") or {}).get(event)
+                        for n, text in enumerate((entry.get("hooks") or {}).get(event, [])):
+                            print("%s: would %s run hook %s%s: %s"
+                                  % (branch, when, event, hooks.label(srcs, n), hooks.render(text, ctx)))
                 continue
             if not args.no_hooks and run_hook(entry, "pre_remove", main, state_dir, results):
                 report_hook(branch, results[0])
@@ -948,8 +962,9 @@ def cmd_hook(args):
             return 0
         if args.dry_run:
             ctx = hooks.context_from_entry(entry, main, slugify(args.branch))
-            for text in commands:
-                print("%s: hook %s: %s" % (args.branch, args.event, hooks.render(text, ctx)))
+            srcs = (entry.get("hook_sources") or {}).get(args.event)
+            for n, text in enumerate(commands):
+                print("%s: hook %s%s: %s" % (args.branch, args.event, hooks.label(srcs, n), hooks.render(text, ctx)))
             return 0
         timeout = args.hook_timeout or entry.get("hook_timeout")
         results = []
@@ -981,8 +996,8 @@ def print_results(results, as_json):
     for r in results:
         name = r["branch"]
         for item in r.get("hook_preview") or []:  # dry run: what would run, with values filled in
-            for text in item["commands"]:
-                print("%s: hook %s: %s" % (name, item["event"], text))
+            for n, text in enumerate(item["commands"]):
+                print("%s: hook %s%s: %s" % (name, item["event"], hooks.label(item.get("sources"), n), text))
         for item in r.get("hook_results") or []:
             report_hook(name, item)
         if r.get("stack"):

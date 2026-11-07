@@ -3,7 +3,9 @@
 import json
 import os
 import sys
+import tempfile
 import unittest
+from unittest import mock
 
 from test_pb import FAIL_CMD, PB, POSIX_ONLY, PY, ROOT, SERVER, SLEEP_CMD, PbCase, http_ok, pb
 
@@ -62,6 +64,58 @@ class RenderTests(unittest.TestCase):
         self.assertNotEqual(a, b)
         for name in (a, b, hooks.db_name("Ünï/cødé!!"), hooks.db_name("///")):
             self.assertRegex(name, r"^[a-z0-9_]+$")
+
+
+class UserConfigUnitTests(unittest.TestCase):
+    def test_path_override_default_xdg_and_off_switch(self):
+        with mock.patch.dict(os.environ, {"PB_USER_CONFIG": "/x/y.json"}):
+            self.assertEqual(hooks.user_config_path(), "/x/y.json")
+        with mock.patch.dict(os.environ, {"PB_USER_CONFIG": ""}):
+            self.assertIsNone(hooks.user_config_path())
+        env = {k: v for k, v in os.environ.items() if k != "PB_USER_CONFIG"}
+        with mock.patch.dict(os.environ, dict(env, XDG_CONFIG_HOME="/cfg", APPDATA="/appdata"), clear=True):
+            expected = "/appdata" if os.name == "nt" else "/cfg"
+            self.assertEqual(hooks.user_config_path(), os.path.join(expected, "parallel-branches", "config.json"))
+
+    def write(self, text):
+        fd, path = tempfile.mkstemp(suffix=".json")
+        self.addCleanup(os.remove, path)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(text)
+        return path
+
+    def test_load_user_reads_hooks_and_timeout(self):
+        path = self.write(json.dumps({"hooks": {"post_start": "x"}, "hook_timeout": 9}))
+        with mock.patch.dict(os.environ, {"PB_USER_CONFIG": path}):
+            cfg, where = hooks.load_user()
+        self.assertEqual((cfg["hook_timeout"], where), (9, path))
+
+    def test_missing_file_is_not_an_error(self):
+        with mock.patch.dict(os.environ, {"PB_USER_CONFIG": "/no/such/file.json"}):
+            self.assertEqual(hooks.load_user(), ({}, None))
+
+    def test_bad_files_are_errors_that_name_the_file(self):
+        for text, expect in (("{nope", "cannot read it as JSON"), ("[1]", "expected a JSON object"),
+                             (json.dumps({"services": []}), "unknown key 'services'"),
+                             (json.dumps({"hooks": {"post_merge": "x"}}), "unknown hook"),
+                             (json.dumps({"hook_timeout": 0}), "hook_timeout")):
+            path = self.write(text)
+            with mock.patch.dict(os.environ, {"PB_USER_CONFIG": path}):
+                with self.assertRaisesRegex(ValueError, expect) as ctx:
+                    hooks.load_user()
+            self.assertIn(path, str(ctx.exception))
+
+    def test_merge_puts_user_commands_first_and_tracks_sources(self):
+        merged, sources = hooks.merge({"post_start": ["u1"], "pre_stop": ["u2"]},
+                                      {"post_start": ["p1", "p2"], "post_remove": ["p3"]})
+        self.assertEqual(merged, {"post_start": ["u1", "p1", "p2"], "pre_stop": ["u2"], "post_remove": ["p3"]})
+        self.assertEqual(sources["post_start"], ["user", "project", "project"])
+        self.assertEqual(hooks.merge({}, {"post_start": ["p"]}), ({"post_start": ["p"]}, None))
+
+    def test_label(self):
+        self.assertEqual(hooks.label(["user", "project"], 0), " (user)")
+        self.assertEqual(hooks.label(["user", "project"], 1), "")
+        self.assertEqual(hooks.label(None, 0), "")
 
 
 class HookCase(PbCase):
@@ -327,6 +381,101 @@ class HookCommandTests(HookCase):
         self.assertEqual(proc.returncode, 0)
         self.assertIn("no pre_stop hook stored", proc.stdout)
         self.assertEqual(self.pb("hook", "post_merge", "feat-a").returncode, 2)  # argparse rejects it
+
+
+class UserConfigTests(HookCase):
+    def user_config(self, hook_map=None, **top):
+        cfg = dict(top)
+        if hook_map is not None:
+            cfg["hooks"] = hook_map
+        with open(self.user_cfg, "w") as fh:
+            json.dump(cfg, fh)
+
+    def test_user_hooks_run_before_the_repo_hooks_and_apply_in_any_repo(self):
+        self.user_config({"post_start": self.probe("user")})
+        self.config({"post_start": self.probe("project")})
+        proc, _ = self.up("feat-a")
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertEqual(self.labels(), ["user", "project"])
+
+    def test_user_hooks_alone_are_enough(self):
+        self.user_config({"post_create": self.probe("user_create")})
+        self.up("feat-a")
+        self.assertEqual(self.labels(), ["user_create"])
+
+    def test_dry_run_labels_user_hooks_and_json_has_the_sources(self):
+        self.user_config({"post_start": "echo from-user {branch_slug}"})
+        self.config({"post_start": "echo from-project"})
+        proc = self.pb("up", "feat-a", "--cmd", SERVER, "--worktree-dir", self.wt, "--dry-run")
+        self.assertIn("feat-a: hook post_start (user): echo from-user feat-a", proc.stdout)
+        self.assertIn("feat-a: hook post_start: echo from-project", proc.stdout)
+        self.assertLess(proc.stdout.index("from-user"), proc.stdout.index("from-project"))
+        rows = json.loads(self.pb("up", "feat-a", "--cmd", SERVER, "--worktree-dir", self.wt,
+                                  "--dry-run", "--json").stdout)
+        self.assertEqual(rows[0]["hook_preview"][0]["sources"], ["user", "project"])
+        self.assertFalse(os.path.exists(os.path.join(self.repo, ".git", "parallel-branches")))
+
+    def test_stored_with_the_branch_and_shown_with_labels_at_teardown(self):
+        self.user_config({"pre_stop": self.probe("approved_user"), "pre_remove": self.probe("rm_user")})
+        self.up("feat-a")
+        self.user_config({"pre_stop": self.probe("swapped_in_later")})  # edited after the branch started
+        proc = self.pb("hook", "pre_stop", "feat-a", "--dry-run")
+        self.assertIn("hook pre_stop (user):", proc.stdout)
+        self.pb("down", "feat-a")
+        self.assertEqual(self.labels(), ["approved_user"])
+        proc = self.pb("clean")
+        self.assertIn("would first run hook pre_remove (user):", proc.stdout)
+        self.pb("clean", "--yes")
+        self.assertEqual(self.labels(), ["approved_user", "rm_user"])
+
+    def test_a_failing_user_pre_start_stops_up_before_the_repo_hook_runs(self):
+        self.user_config({"pre_start": FAIL_CMD})
+        self.config({"pre_start": self.probe("project")})
+        proc, rows = self.up("feat-a")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("hook pre_start", rows[0]["note"])
+        self.assertEqual(self.labels(), [])
+
+    def test_no_hooks_skips_user_hooks_and_stores_none(self):
+        self.user_config({"pre_stop": self.probe("user")})
+        self.up("feat-a", extra=["--no-hooks"])
+        self.pb("down", "feat-a")
+        self.assertEqual(self.labels(), [])
+
+    def test_timeout_user_then_repo_then_flag(self):
+        def stored(*extra):
+            self.pb("down", "--all")
+            self.up("feat-a", extra=extra)
+            return json.loads(self.pb("status", "--json").stdout)[0].get("hook_timeout")
+        self.user_config({"pre_stop": "echo x"}, hook_timeout=7)
+        self.assertEqual(stored(), 7)
+        self.config({"pre_stop": "echo y"}, hook_timeout=9)  # the repo's own value wins over the user's
+        self.assertEqual(stored(), 9)
+        self.assertEqual(stored("--hook-timeout", "5"), 5)
+
+    def test_a_bad_user_config_stops_everything_before_a_worktree_exists(self):
+        for text in ("{nope", json.dumps({"services": []}), json.dumps({"hooks": {"post_merge": "x"}})):
+            with open(self.user_cfg, "w") as fh:
+                fh.write(text)
+            for extra in ([], ["--dry-run"]):
+                proc = self.pb("up", "feat-a", "--cmd", SERVER, "--worktree-dir", self.wt, *extra)
+                self.assertEqual(proc.returncode, 2, text)
+                self.assertIn("bad user config: " + self.user_cfg, proc.stderr)
+            self.assertFalse(os.path.exists(os.path.join(self.wt, "feat-a")))
+
+    def test_a_service_name_that_this_repo_lacks_is_reported_against_the_user_file(self):
+        self.user_config({"post_start": "curl {url.api}/seed"})
+        proc = self.pb("up", "feat-a", "--cmd", SERVER, "--worktree-dir", self.wt, "--dry-run")
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("bad hooks in " + self.user_cfg, proc.stderr)
+        self.assertIn("unknown service 'api'", proc.stderr)
+
+    def test_the_other_commands_do_not_read_the_user_config(self):
+        self.up("feat-a")
+        with open(self.user_cfg, "w") as fh:
+            fh.write("{nope")  # broken, but only `up` reads it
+        for args in (("status",), ("down", "feat-a"), ("clean",)):
+            self.assertEqual(self.pb(*args).returncode, 0, args)
 
 
 class TrustTests(HookCase):

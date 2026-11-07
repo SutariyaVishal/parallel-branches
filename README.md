@@ -8,7 +8,7 @@ Run several git branches side by side, each with its own dev server on its own p
 
 It is an [agent skill](https://agentskills.io) in the open `SKILL.md` format, built around one dependency-free Python script, `pb.py`. It has only been tried with Claude Code. Other agents that read `SKILL.md` (Codex, Gemini CLI, Cursor and others) should be able to use it, but that is untested. You can also use the script on its own.
 
-> **Status: beta (v0.7.0).** Tested in CI on Linux, macOS and Windows with Python 3.9 and newer. Port handling was measured against real Vite, Flask and plain Node servers; the other stacks follow each tool's documentation. See [Limits](#limits).
+> **Status: beta (v0.8.0).** Tested in CI on Linux, macOS and Windows with Python 3.9 and newer. Port handling was measured against real Vite, Flask and plain Node servers; the other stacks follow each tool's documentation. See [Limits](#limits).
 
 ## The problem
 
@@ -156,6 +156,7 @@ What sets this apart from a plain "run a command" hook:
 - Values are shell-quoted, so a branch named `a$(touch${IFS}pwned)`, which git accepts, cannot run anything.
 - `up --dry-run` prints every hook with values filled in. `down` and `clean` run the commands stored when the branch started, not whatever the config says later.
 - `pb hook post_start feat-a` runs a stored hook again, for example to re-seed a database; `--dry-run` only shows it.
+- A per-user file (`~/.config/parallel-branches/config.json`) holds hooks for every repository. They run first and show as `(user)` in dry runs.
 - Each command has a timeout and a log file.
 
 Full reference: [`skills/parallel-branches/references/hooks.md`](skills/parallel-branches/references/hooks.md). `parallel-branches` has no commit or merge hooks; it does not commit or merge.

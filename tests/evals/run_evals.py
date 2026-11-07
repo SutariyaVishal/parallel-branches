@@ -117,7 +117,7 @@ def run_one(args, scenario, model, out_dir, index=0):
         started = time.time()
         proc = subprocess.run(claude_command(args, model, scenario["prompt"], os.path.realpath(root)), cwd=repo,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True,
-                              timeout=args.timeout)
+                              timeout=args.timeout, env=fixtures.ENV)
         commands, final_text = graders.parse_transcript(proc.stdout.splitlines())
         state = collect_state(repo)
         run = {"commands": commands, "final_text": final_text, "state": state}

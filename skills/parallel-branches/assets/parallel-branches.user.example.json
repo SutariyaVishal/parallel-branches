@@ -1,0 +1,7 @@
+{
+  "hooks": {
+    "post_start": "echo {branch} is up at {URL} >> $HOME/.parallel-branches.log",
+    "post_remove": "echo {branch} removed >> $HOME/.parallel-branches.log"
+  },
+  "hook_timeout": 30
+}

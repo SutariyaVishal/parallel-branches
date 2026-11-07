@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.0
+- User-level hooks: a per-user file (`$PB_USER_CONFIG`, else `~/.config/parallel-branches/config.json`, `%APPDATA%` on Windows) with `hooks` and `hook_timeout`. Its hooks run in every repository, before the repository's own hooks for the same event, and are marked `(user)` in `up --dry-run`, `clean` and `pb hook --dry-run` (and as `sources` in the JSON). They are stored with the branch at `up` like the others, so teardown runs what was shown. `--no-hooks` skips both sets. A bad user config stops `up` with exit code 2 before any worktree exists. Example in `assets/parallel-branches.user.example.json`.
+- Tests and evals no longer read a real user config (`PB_USER_CONFIG` is switched off for them).
+
 ## 0.7.0
 - New hook `pre_remove`: runs in `clean --yes` inside the worktree, just before it is removed (database dumps, saving local data). Unlike the other teardown hooks it can stop the removal: if it fails, that worktree is kept and `clean` says so. `clean --no-hooks` removes it anyway. `clean` without `--yes` lists it before `post_remove`.
 - Evals: two scenarios for `pre_remove` (`hooks-clean-confirm`, `hooks-clean-run`), nine in all, with graders `no_clean_yes`, `dry_run_before_clean`, `state_worktree_gone` and `state_repo_file`.

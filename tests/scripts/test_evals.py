@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, os.path.join(ROOT, "tests", "evals"))
@@ -170,6 +171,9 @@ class OracleTests(unittest.TestCase):
         self.root = os.path.realpath(tempfile.mkdtemp(prefix="pb-oracle-"))
         self.repos = []
         self.addCleanup(self.cleanup_all)
+        patcher = mock.patch.dict(os.environ, {"PB_USER_CONFIG": ""})  # the scripted shell commands inherit it
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def cleanup_all(self):
         """Stop servers and dev browsers in every repo this test made, then delete the temp dir."""

@@ -123,6 +123,9 @@ class PbCase(unittest.TestCase):
         for name in ("feat-a", "feat-b"):
             self.git("branch", name)
         self.wt = os.path.join(self.tmp, "wts")
+        # Where a per-user config would be. Nothing is there unless a test writes it, so a real
+        # ~/.config/parallel-branches/config.json on the machine running the tests is never read.
+        self.user_cfg = os.path.join(self.tmp, "user-config.json")
 
     def tearDown(self):
         self.pb("down", "--all")
@@ -134,7 +137,8 @@ class PbCase(unittest.TestCase):
 
     def pb(self, *args):
         return subprocess.run([sys.executable, PB, "--repo", self.repo] + list(args),
-                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True,
+                              env=dict(os.environ, PB_USER_CONFIG=self.user_cfg))
 
     def up(self, *branches, cmd=SERVER, extra=()):
         cmd_args = ["--cmd", cmd] if cmd else []

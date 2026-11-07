@@ -42,11 +42,11 @@ It stops only the processes it started, refuses to delete worktrees that have un
 
 ## Quick start
 
-![Two branches started, listed, stopped and cleaned up](docs/demo.gif)
+![A dry run, then two branches started, listed, stopped and cleaned up](docs/demo.gif)
 
 With an agent, ask in plain words: *"run feature-login and fix-checkout side by side"*. It shows you the plan (a dry run) and waits for your OK before it starts anything. By hand, it looks like this.
 
-The animation replays real `pb` output from a two-branch run (typing and pauses are added) and starts at `pb up`. Below is the same session as text, with paths shortened and the dry run first, which is where you should always begin. The project is a Node app whose `dev` script reads `PORT`.
+The animation replays real `pb` output from a two-branch run (typing and pauses are added, and the screen is cleared after the dry run). Below is the same session as text, with paths shortened. The project is a Node app whose `dev` script reads `PORT`.
 
 ```
 $ pb up feature-login fix-checkout --dry-run
@@ -55,13 +55,17 @@ feature-login  -    4403  -    -
 fix-checkout   -    4174  -    -
 feature-login: stack node (low confidence)
 feature-login: command npm run dev
+feature-login: install: npm ci
 feature-login: dry run, nothing started (stack and warnings read from the main checkout)
-...
+fix-checkout: stack node (low confidence)
+fix-checkout: command npm run dev
+fix-checkout: install: npm ci
+fix-checkout: dry run, nothing started (stack and warnings read from the main checkout)
 
 $ pb up feature-login fix-checkout
-BRANCH         URL                    PORT  PID    PATH
-feature-login  http://localhost:4403  4403  91214  ~/code/myapp.worktrees/feature-login
-fix-checkout   http://localhost:4174  4174  91266  ~/code/myapp.worktrees/fix-checkout
+BRANCH         URL                    PORT  PID   PATH
+feature-login  http://localhost:4403  4403  9262  ~/code/myapp.worktrees/feature-login
+fix-checkout   http://localhost:4174  4174  9306  ~/code/myapp.worktrees/fix-checkout
 feature-login: stack node (low confidence)
 feature-login: command npm run dev
 feature-login: install: npm ci
@@ -74,9 +78,9 @@ fix-checkout: HTTP 200
 fix-checkout: log ~/code/myapp/.git/parallel-branches/logs/fix-checkout.log
 
 $ pb status
-BRANCH         URL                    STATUS   PID    DEV-BROWSER  PATH
-feature-login  http://localhost:4403  healthy  91214  -            ~/code/myapp.worktrees/feature-login
-fix-checkout   http://localhost:4174  healthy  91266  -            ~/code/myapp.worktrees/fix-checkout
+BRANCH         URL                    STATUS   PID   DEV-BROWSER  PATH
+feature-login  http://localhost:4403  healthy  9262  -            ~/code/myapp.worktrees/feature-login
+fix-checkout   http://localhost:4174  healthy  9306  -            ~/code/myapp.worktrees/fix-checkout
 
 $ pb down --all
 feature-login: stopped (port 4403 free)

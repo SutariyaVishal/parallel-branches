@@ -13,6 +13,8 @@ BRANCHES = ("feat-a", "feat-b")
 with open(os.path.join(ROOT, "tests", "helpers", "serve.py")) as _fh:
     SERVE_PY = _fh.read()
 DEV_SCRIPT = "python3 serve.py"
+# The evals must not read a per-user hooks config from the machine they run on: an empty value switches it off.
+ENV = dict(os.environ, PB_USER_CONFIG="")
 
 FILES = {
     "dev-app": {
@@ -84,7 +86,7 @@ def make_repo(kind, root):
 
 def pb(repo, *args):
     return subprocess.run([sys.executable, PB, "--repo", repo] + list(args), stdout=subprocess.PIPE,
-                          stderr=subprocess.PIPE, universal_newlines=True)
+                          stderr=subprocess.PIPE, universal_newlines=True, env=ENV)
 
 
 def start(repo, *branches):

@@ -52,6 +52,21 @@ The same values are exported as environment variables, which is the safest way t
 
 The ports are the ones actually allocated, after probing for free ones. They are not a number derived from the branch name, so a hook can safely hand them to another program.
 
+## User-level hooks
+
+A per-user file holds hooks that apply in every repository, for example a log line or a notification when a branch is up. It is a separate file from the repository's config. Copy `assets/parallel-branches.user.example.json` to start.
+
+- **Location:** `$PB_USER_CONFIG` if set (an empty value switches the file off), otherwise `$XDG_CONFIG_HOME/parallel-branches/config.json` (`~/.config/...` by default) on macOS and Linux, and `%APPDATA%\parallel-branches\config.json` on Windows.
+- **Contents:** `hooks` and `hook_timeout`, in the same format as the repository config. Any other key is an error, so a `services` block put there by mistake is not silently ignored.
+- **Order:** for each event the user's commands run first, then the repository's, as one list. The first failing command ends the list, so a failing user `pre_start` stops `up` before the repository's `pre_start` runs.
+- **Labels:** `up --dry-run`, `clean` without `--yes` and `pb hook --dry-run` mark each user command with `(user)`. The JSON rows carry a `sources` list.
+- **Stored like the rest:** the merged commands are stored with the branch at `up`, so `down` and `clean` run what was shown even if either file changes later. `--no-hooks` skips both sets.
+- **Timeout:** `--hook-timeout`, then the repository's `hook_timeout`, then the user's, then 120.
+- **Only `up` reads the file.** A file that is not valid JSON, or has an unknown key or event, stops `up` with exit code 2 before any worktree exists, and the message names the file.
+- **Keep it generic.** Names like `{url.api}` must exist in the repository the hook runs in, or `up` stops with an error that names the user file. Put hooks that need a particular service in that repository's config.
+
+The file is yours and is not part of any repository, so nothing a repository ships can edit it. But it runs everywhere, including in repositories you do not know, so keep to commands you would be happy to run in any of them.
+
 ## Trust
 
 Hook commands run in a shell on your machine, like a start command. So:
@@ -76,5 +91,5 @@ Output goes to `.git/parallel-branches/logs/<branch_slug>.hook-<event>.log`. `st
 - Commands in one list run one after another. There is no concurrent form.
 - A hook that starts a background process and leaves it running is not tracked or stopped by `down`. Use a `services` entry for processes that should live as long as the branch.
 - Removing a worktree with `git worktree remove` instead of `pb clean` runs no hooks, so `pre_remove` and `post_remove` never fire.
-- Hooks come from the repository config only. There is no user-level config file.
+- Hooks come from the repository config and the one per-user file. There is no other level, and no per-directory or per-organisation config.
 - A config committed on the branch can only be read once its worktree exists. A mistake in `hooks` there is reported after the worktree was created. `--dry-run` reads the main checkout's config and catches it first.

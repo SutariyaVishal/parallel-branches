@@ -40,7 +40,7 @@ Some branches need more than one process, such as a web front end plus an API. T
 
 A repository can run its own commands at fixed points through `hooks` in `.parallel-branches.json`: `post_create`, `pre_start`, `post_start`, `pre_stop`, `pre_remove`, `post_remove`. They are how a branch gets its own database or seed data. See `references/hooks.md`.
 
-- `PB up --dry-run` prints each hook with its ports and names filled in (`hook post_start: ...`). They run in a shell, so show them to the user as part of the plan and wait for approval, like start commands.
+- `PB up --dry-run` prints each hook with its ports and names filled in (`hook post_start: ...`). Hooks from the user's own config file show as `hook post_start (user): ...` and run in every repository, before the repository's. Show those too. They run in a shell, so show them to the user as part of the plan and wait for approval, like start commands.
 - `post_create` and `pre_start` failing stops `up` before any server starts. `pre_remove` failing keeps that worktree (`PB clean --yes --no-hooks` removes it anyway, but ask first). `post_start`, `pre_stop` and `post_remove` failing is only reported (`WARNING hook ...`), and the branch still starts, stops or is removed.
 - `down` and `clean` run the commands stored when the branch was started, not the current file. `PB clean` without `--yes` lists the `pre_remove` and `post_remove` commands it would run. Mention them when you ask before `PB clean --yes`.
 - `--no-hooks` on `up`, `down` or `clean` skips them. Use it if the user does not trust the repository's hooks. `up --hook-timeout N` changes the per-command limit.

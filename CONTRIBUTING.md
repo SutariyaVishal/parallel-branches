@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping. This project is small on purpose: one script, no runtime dependencies, Python 3.9+.
+Thanks for helping. This project is small on purpose: one script, no runtime dependencies, Python 3.9+. Please follow the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## Set up and test
 

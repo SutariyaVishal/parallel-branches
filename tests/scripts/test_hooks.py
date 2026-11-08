@@ -91,7 +91,7 @@ class ConcurrentStepTests(unittest.TestCase):
         return hooks.run("post_create", steps, self.ctx, self.tmp, self.log, timeout)
 
     def log_text(self):
-        with open(self.log) as fh:
+        with open(self.log, errors="replace") as fh:  # as pb's own `tail` reads it
             return fh.read()
 
     def test_named_commands_run_at_the_same_time_and_steps_stay_in_order(self):

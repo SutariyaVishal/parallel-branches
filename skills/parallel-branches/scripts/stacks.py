@@ -42,7 +42,7 @@ URL_RE = re.compile(r"https?://([A-Za-z0-9._-]+)(?::(\d{2,5}))?[^\s'\"`)>,;]*")
 
 def read_text(path, limit=200000):
     try:
-        with open(path, errors="replace") as fh:
+        with open(path, encoding="utf-8", errors="replace") as fh:
             return fh.read(limit)
     except OSError:
         return ""
@@ -50,7 +50,7 @@ def read_text(path, limit=200000):
 
 def read_json(path):
     try:
-        with open(path) as fh:
+        with open(path, encoding="utf-8") as fh:  # JSON is UTF-8; Windows' default code page would mangle or drop it
             data = json.load(fh)
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):

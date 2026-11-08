@@ -212,6 +212,10 @@ ruff check .                                    # lint
 
 Behaviour of the skill with real models is checked by `tests/evals/` (ten scenarios, graded by deterministic rules). See [CONTRIBUTING.md](CONTRIBUTING.md) for how to add a stack and how to run the evals, which spend API money. [docs/DESIGN.md](docs/DESIGN.md) records the design decisions, measurements and known gaps, and [CHANGELOG.md](CHANGELOG.md) the releases. Everyone taking part is asked to follow the [code of conduct](CODE_OF_CONDUCT.md).
 
+## Feedback
+
+If `parallel-branches` saves you time, a star on GitHub helps other people find it. Bug reports, ideas and pull requests are welcome: [open an issue](https://github.com/SutariyaVishal/parallel-branches/issues).
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

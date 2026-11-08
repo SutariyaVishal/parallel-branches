@@ -45,6 +45,7 @@ A repository can run its own commands at fixed points through `hooks` in `.paral
 - `down` and `clean` run the commands stored when the branch was started, not the current file. `PB clean` without `--yes` lists the `pre_remove` and `post_remove` commands it would run. Mention them when you ask before `PB clean --yes`.
 - `--no-hooks` on `up`, `down` or `clean` skips them. Use it if the user does not trust the repository's hooks. `up --hook-timeout N` changes the per-command limit.
 - `PB hook EVENT BRANCH` runs one stored hook of a tracked branch by hand (`--dry-run` shows it). Show the dry run and get approval first, as for any hook.
+- `PB hooks [BRANCH] [-v]` shows what a branch stored, with values filled in and the last result of each (read only).
 - `restart` runs no hooks.
 
 ## Commands
@@ -54,6 +55,7 @@ A repository can run its own commands at fixed points through `hooks` in `.paral
 | `PB up BRANCH... [--cmd CMD] [--dry-run] [--no-install] [--no-hooks] [--browser] [--json]` | Create worktrees, install, start, health-check |
 | `PB status [--json]` | Show branches, URLs, health, dev-browser endpoints |
 | `PB browser BRANCH [--path /x] [--headless]` | Open a dev-mode browser for a running branch |
+| `PB hooks [BRANCH] [-v] [--json]` | Show stored hooks with values filled in (read only) |
 | `PB down BRANCH...` or `--all` `[--no-hooks]` | Stop only the processes this tool started, and close their dev browsers |
 | `PB clean [--yes] [--force] [--no-hooks]` | Remove worktrees this tool created. Dry run without `--yes` |
 | `PB restart BRANCH [SERVICE]` | Restart one service, or all of them, on the same ports |

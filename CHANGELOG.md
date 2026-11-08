@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.9.0
+- New command `pb hooks [BRANCH] [-v] [--json]`: shows the hooks stored for a tracked branch (all tracked branches without a name) with values filled in, `(user)` marks, and the last result of each event. `-v` adds every value a hook can use (`db_name`, `PORT`, `url.NAME` and the rest). Read only: no lock, nothing written.
+
 ## 0.8.0
 - User-level hooks: a per-user file (`$PB_USER_CONFIG`, else `~/.config/parallel-branches/config.json`, `%APPDATA%` on Windows) with `hooks` and `hook_timeout`. Its hooks run in every repository, before the repository's own hooks for the same event, and are marked `(user)` in `up --dry-run`, `clean` and `pb hook --dry-run` (and as `sources` in the JSON). They are stored with the branch at `up` like the others, so teardown runs what was shown. `--no-hooks` skips both sets. A bad user config stops `up` with exit code 2 before any worktree exists. Example in `assets/parallel-branches.user.example.json`.
 - Tests and evals no longer read a real user config (`PB_USER_CONFIG` is switched off for them).

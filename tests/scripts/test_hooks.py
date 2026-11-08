@@ -383,6 +383,49 @@ class HookCommandTests(HookCase):
         self.assertEqual(self.pb("hook", "post_merge", "feat-a").returncode, 2)  # argparse rejects it
 
 
+class HooksShowTests(HookCase):
+    def test_lists_stored_hooks_with_values_filled_in_and_last_run(self):
+        self.config({"post_start": self.probe("seed", "{URL}"), "pre_stop": self.probe("bye", "{db_name}")})
+        _, rows = self.up("feat-a")
+        proc = self.pb("hooks", "feat-a")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("feat-a: hook post_start, last run ok", proc.stdout)
+        self.assertIn("http://localhost:%d" % rows[0]["port"], proc.stdout)
+        self.assertIn("feat-a: hook pre_stop, never run", proc.stdout)
+        self.assertNotIn("values (the same", proc.stdout)
+
+    def test_verbose_prints_every_value_and_json_has_them(self):
+        self.config({"post_start": self.probe("seed")})
+        _, rows = self.up("feat-a")
+        proc = self.pb("hooks", "feat-a", "-v")
+        self.assertIn("values (the same as PB_* environment variables)", proc.stdout)
+        self.assertRegex(proc.stdout, r"db_name\s+feat_a_[0-9a-f]{4}")
+        self.assertRegex(proc.stdout, r"PORT\s+%d" % rows[0]["port"])
+        data = json.loads(self.pb("hooks", "--json").stdout)
+        self.assertEqual(data[0]["branch"], "feat-a")
+        self.assertEqual(data[0]["variables"]["PORT"], rows[0]["port"])
+        self.assertEqual(data[0]["hooks"][0]["event"], "post_start")
+
+    def test_marks_user_hooks_and_reads_what_was_stored(self):
+        with open(self.user_cfg, "w") as fh:
+            json.dump({"hooks": {"post_start": self.probe("mine")}}, fh)
+        self.config({"post_start": self.probe("ours")})
+        self.up("feat-a")
+        out = self.pb("hooks", "feat-a").stdout
+        self.assertRegex(out, r"mine.*\(user\)")
+        self.assertNotRegex(out, r"ours.*\(user\)")
+
+    def test_writes_nothing_and_handles_no_hooks_and_unknown_branch(self):
+        self.up("feat-a")
+        before = self.state_text()
+        proc = self.pb("hooks")
+        self.assertIn("feat-a: no hooks stored", proc.stdout)
+        self.assertEqual(self.state_text(), before)
+        proc = self.pb("hooks", "nope")
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("not tracked", proc.stderr)
+
+
 class UserConfigTests(HookCase):
     def user_config(self, hook_map=None, **top):
         cfg = dict(top)

@@ -78,7 +78,7 @@ Caveats: small samples; the graders were adjusted after reading agent output, so
 - Windows stops a service by force-killing its process tree and skips the port-owner check.
 - Chrome versions other than 156 were not tried with the dev-mode browser.
 - Not detected: Docker Compose, Rust, .NET, PHP (use `--cmd`).
-- `status` does not show per-service logs, or hook results (only `status --json` does, under `hook_runs`).
+- `status` does not show per-service logs, or hook results (`pb hooks` and `status --json` do).
 - Hooks have no concurrent form. There is one per-user file and one per-repository file, and no other level. `restart` runs none.
 - A config committed on a branch can only be read after its worktree exists, so a mistake in it (hooks or services) is reported after the worktree was created and the worktree is not tracked for `clean`. The dry run reads the main checkout's config first.
 - The two hooks scenarios pass with and without the hook wording in `SKILL.md` (Haiku, 5 of 5 each way), because the dry run prints the hooks and models repeat them anyway. They guard against hooks being lost on the way to the user, but do not show that the wording is needed. A scenario that does would need a repo whose hooks are easy to overlook, for example a long dry-run output.

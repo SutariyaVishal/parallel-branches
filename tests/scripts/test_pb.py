@@ -17,10 +17,16 @@ import urllib.request
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 PB = os.path.join(ROOT, "skills", "parallel-branches", "scripts", "pb.py")
 POSIX_ONLY = unittest.skipIf(os.name == "nt", "needs a POSIX shell")
+WINDOWS_ONLY = unittest.skipIf(os.name != "nt", "needs Windows")
 PY = '"%s"' % sys.executable  # the interpreter running the tests, quoted for either shell
 HELPER = os.path.join(ROOT, "tests", "helpers", "serve.py")
 SERVER = PY + ' "%s" {PORT}' % HELPER  # not `-m http.server`: see tests/helpers/serve.py
 GROUP_SERVER = "sh -c '%s \"%s\" {PORT} & wait'" % (sys.executable, HELPER)
+WIN_GROUP_SERVER = (
+    PY + ' -c "import subprocess, sys, time; '
+    'subprocess.Popen([sys.executable, r\'%s\', sys.argv[1]]); '
+    'time.sleep(120)" {PORT}' % HELPER
+)
 # Reads PORT from the environment, the way a typical dev server does. Used through `npm run dev`.
 with open(HELPER) as _fh:
     SERVE_PY = _fh.read()
@@ -153,7 +159,6 @@ class PbCase(unittest.TestCase):
         return os.path.join(self.repo, ".git", "parallel-branches", "state.json")
 
 
-
 class CliTests(PbCase):
     def test_two_branches_run_side_by_side(self):
         proc, rows = self.up("feat-a", "feat-b")
@@ -174,6 +179,19 @@ class CliTests(PbCase):
         self.assertIn("stopped", self.pb("down", "feat-a").stdout)
         self.assertFalse(http_ok(port))
         self.assertTrue(pb.port_is_free(port))
+        self.assertEqual(json.loads(self.pb("status", "--json").stdout)[0]["live"], "stopped")
+
+    @WINDOWS_ONLY
+    def test_down_stops_the_whole_process_tree_windows(self):
+        _, rows = self.up("feat-a", cmd=WIN_GROUP_SERVER)
+        port = rows[0]["port"]
+        pid = rows[0]["pid"]
+        self.assertTrue(http_ok(port))
+        self.assertTrue(pb.group_alive(pid))
+        self.assertIn("stopped", self.pb("down", "feat-a").stdout)
+        self.assertFalse(http_ok(port))
+        self.assertTrue(pb.port_is_free(port))
+        self.assertFalse(pb.group_alive(pid))
         self.assertEqual(json.loads(self.pb("status", "--json").stdout)[0]["live"], "stopped")
 
     def test_failed_start_reports_log_and_exits_nonzero(self):
@@ -825,3 +843,4 @@ class BrowserCliTests(PbCase):
 
 if __name__ == "__main__":
     unittest.main()
+    

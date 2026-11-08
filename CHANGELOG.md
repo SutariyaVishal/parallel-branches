@@ -1,7 +1,9 @@
 # Changelog
 
-## Unreleased
-- Warn once per branch when copied env files contain database settings, including dry runs. Report only file and variable names; do not rewrite values.
+## 0.11.0
+- Warning when copied env files point every branch at the same database (#9, thanks @sunxiuguo). `up` and `up --dry-run` name the file and variable, never the value. It looks for `DATABASE_URL`, `DB_URL`, `MONGO_URI`, `MONGODB_URI`, `REDIS_URL`, database-name keys (`DB_NAME`, `DB_DATABASE`, `PGDATABASE`, `POSTGRES_DB`, `MYSQL_DATABASE`) and database URL schemes, including SQLAlchemy `+driver` and `jdbc:` forms. It reads `.env`, `.env.*`, `*.env` and `.envrc` files, including those inside copied directories, without following symlinks. A real `up` checks after `post_create`, so a hook that removes the setting clears the warning. `references/stacks.md` has a "Shared state" section with the hooks workaround.
+- `copied_env` is kept when a branch is stopped and started again (it used to reset to an empty list).
+- Evals: scenario `shared-database-warning` and grader `final_not_mentions`, ten scenarios in all.
 
 ## 0.10.0
 - Copying git-ignored files now also copies git-ignored directories named in `.worktreeinclude` or the config `copy` list (`.cache/`, `out/`), cloned copy-on-write where possible, so warm build caches carry over. A directory git would track is never copied; nothing in the worktree is overwritten.

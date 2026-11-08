@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -72,6 +73,73 @@ class RenderTests(unittest.TestCase):
         self.assertNotEqual(a, b)
         for name in (a, b, hooks.db_name("Ünï/cødé!!"), hooks.db_name("///")):
             self.assertRegex(name, r"^[a-z0-9_]+$")
+
+
+class ConcurrentStepTests(unittest.TestCase):
+    """Steps that are objects of named commands start together (hooks.run directly)."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.log = os.path.join(self.tmp, "hook.log")
+        self.ctx = hooks.context("feat-a", "feat-a", self.tmp, self.tmp, {None: (4100, 4101)}, None)
+
+    def py(self, code):
+        return PY + ' -c "%s"' % code
+
+    def run_steps(self, steps, timeout=30):
+        return hooks.run("post_create", steps, self.ctx, self.tmp, self.log, timeout)
+
+    def log_text(self):
+        with open(self.log) as fh:
+            return fh.read()
+
+    def test_named_commands_run_at_the_same_time_and_steps_stay_in_order(self):
+        nap = "import time; time.sleep(2); print('%s done')"
+        started = time.time()
+        ok, detail = self.run_steps(["echo first", {"db": self.py(nap % "db"), "cache": self.py(nap % "cache")},
+                                     "echo last"])
+        self.assertTrue(ok, detail)
+        self.assertLess(time.time() - started, 3.8)  # one after the other would take 4 s or more
+        self.assertEqual(detail, "4 commands ran")
+        text = self.log_text()
+        for piece in ("first", "$ [db] ", "db done", "$ [cache] ", "cache done", "last"):
+            self.assertIn(piece, text)
+        self.assertLess(text.index("db done"), text.index("$ [cache] "))  # output is grouped per command
+        self.assertLess(text.index("cache done"), text.index("last"))
+        self.assertEqual([n for n in os.listdir(self.tmp) if n.endswith(".part")], [])
+
+    def test_a_failing_command_fails_the_step_after_the_others_finish_and_stops_the_list(self):
+        marker = os.path.join(self.tmp, "slow-finished")
+        slow = self.py("import time; time.sleep(1); open(r'%s', 'w').close()" % marker)
+        ok, detail = self.run_steps([{"bad": FAIL_CMD, "slow": slow}, "echo never"])
+        self.assertFalse(ok)
+        self.assertRegex(detail, r"^step 1: \[bad\] exited with code 3")
+        self.assertTrue(os.path.exists(marker))  # the sibling was not cut off
+        self.assertNotIn("never", self.log_text())
+
+    def test_one_deadline_for_the_whole_step(self):
+        started = time.time()
+        ok, detail = self.run_steps([{"a": SLEEP_CMD, "b": SLEEP_CMD}], timeout=1)
+        self.assertFalse(ok)
+        self.assertLess(time.time() - started, 20)
+        self.assertIn("[a] timed out after 1s", detail)
+        self.assertIn("[b] timed out after 1s", detail)
+
+    def test_parse_and_describe(self):
+        cmds, _ = hooks.parse({"hooks": {"post_create": {"db": "createdb {db_name}", "deps": "make deps"},
+                                         "pre_start": ["a", {"x": "b {PORT}"}]}})
+        self.assertEqual(cmds["post_create"], [{"db": "createdb {db_name}", "deps": "make deps"}])
+        self.assertEqual(hooks.describe(cmds["pre_start"][1], self.ctx), "together: [x] b 4100")
+        self.assertRegex(hooks.describe(cmds["post_create"][0], self.ctx),
+                         r"^together: \[db\] createdb feat_a_[0-9a-f]{4} \[deps\] make deps$")
+        for bad in ({}, {"db": ""}, {"db": 3}, {"bad name": "x"}, [{"ok": "x"}, {}]):
+            with self.assertRaises(ValueError):
+                hooks.parse({"hooks": {"post_create": bad}})
+        with self.assertRaises(ValueError):  # names inside a step are checked like any command
+            hooks.parse({"hooks": {"post_create": {"x": "curl {url}"}}})
+        with self.assertRaises(ValueError):
+            hooks.parse({"hooks": {"post_create": {"x": "curl {url.nope}"}}}, {"api"})
 
 
 class UserConfigUnitTests(unittest.TestCase):
@@ -241,6 +309,15 @@ class LifecycleTests(HookCase):
 
 
 class FailureTests(HookCase):
+    def test_concurrent_step_in_a_real_up_and_its_dry_run(self):
+        self.config({"post_create": {"one": self.probe("one", "{PORT}"), "two": self.probe("two", "{branch}")}})
+        out = self.pb("up", "feat-a", "--cmd", SERVER, "--dry-run").stdout
+        self.assertRegex(out, r"feat-a: hook post_create: together: \[one\] .* \[two\] ")
+        proc, rows = self.up("feat-a")
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertEqual(sorted(self.labels()), ["one", "two"])
+        self.assertIn("together: [one]", self.pb("hooks", "feat-a").stdout)
+
     def test_failing_pre_start_stops_the_branch_before_anything_starts(self):
         self.config({"pre_start": FAIL_CMD})
         proc, rows = self.up("feat-a")

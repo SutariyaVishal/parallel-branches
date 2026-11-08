@@ -8,7 +8,7 @@ Run several git branches side by side, each with its own dev server on its own p
 
 It is an [agent skill](https://agentskills.io) in the open `SKILL.md` format, built around one dependency-free Python script, `pb.py`. It has only been tried with Claude Code. Other agents that read `SKILL.md` (Codex, Gemini CLI, Cursor and others) should be able to use it, but that is untested. You can also use the script on its own.
 
-> **Status: beta (v0.12.0).** Tested in CI on Linux, macOS and Windows with Python 3.9 and newer. Port handling was measured against real Vite, Flask and plain Node servers; the other stacks follow each tool's documentation. See [Limits](#limits).
+> **Status: beta (v0.13.0).** Tested in CI on Linux, macOS and Windows with Python 3.9 and newer. Port handling was measured against real Vite, Flask and plain Node servers; the other stacks follow each tool's documentation. See [Limits](#limits).
 
 ## The problem
 
@@ -153,6 +153,7 @@ Six events: `post_create` (new worktree, before install), `pre_start` (before an
 What sets this apart from a plain "run a command" hook:
 
 - Hooks see the ports that were actually allocated, as `{PORT}`, `{URL}` (or `{url.api}` for a named service) and `PB_PORT`, not a number derived from the branch name.
+- A step can be an object of named commands, `{"deps": "npm ci", "assets": "make assets"}`, which start together; the next step waits for all of them.
 - `post_start` runs only after the health checks pass. Add `"background_hooks": ["post_start"]` and it runs in the background, so `up` does not wait for a slow seed; `pb hooks` shows the result and `down` stops it if still running.
 - Values are shell-quoted, so a branch named `a$(touch${IFS}pwned)`, which git accepts, cannot run anything.
 - `up --dry-run` prints every hook with values filled in. `down` and `clean` run the commands stored when the branch started, not whatever the config says later.

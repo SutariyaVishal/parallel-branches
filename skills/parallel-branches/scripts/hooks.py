@@ -28,6 +28,7 @@ import json
 import os
 import re
 import subprocess
+import time
 
 import procs
 import stacks
@@ -105,6 +106,22 @@ def merge(user, project):
     return merged, (sources if user else None)
 
 
+STEP_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def valid_step(step):
+    """A step is a command string, or an object of named commands that run at the same time."""
+    if isinstance(step, str):
+        return bool(step.strip())
+    return (isinstance(step, dict) and bool(step)
+            and all(isinstance(k, str) and STEP_NAME_RE.match(k) and isinstance(v, str) and v.strip()
+                    for k, v in step.items()))
+
+
+def step_commands(step):
+    return [step] if isinstance(step, str) else list(step.values())
+
+
 def parse(cfg, service_names=()):
     """Validate the hooks in a config. Returns ({event: [commands]}, timeout seconds).
 
@@ -123,10 +140,11 @@ def parse(cfg, service_names=()):
     for event, value in raw.items():
         if event not in EVENTS:
             raise ValueError("unknown hook %r; the events are %s" % (event, ", ".join(EVENTS)))
-        items = [value] if isinstance(value, str) else value
-        if not isinstance(items, list) or not items or not all(isinstance(x, str) and x.strip() for x in items):
-            raise ValueError("hook %s must be a command string or a non-empty list of command strings" % event)
-        for text in items:
+        items = [value] if isinstance(value, (str, dict)) else value
+        if not isinstance(items, list) or not items or not all(valid_step(x) for x in items):
+            raise ValueError("hook %s must be a command string, an object of named commands that run at the "
+                             "same time, or a non-empty list of those" % event)
+        for text in (cmd for step in items for cmd in step_commands(step)):
             for word in WORDLIKE_RE.findall(text):  # {url} for {URL}: it would run literally, so refuse
                 right = next((n for n in NAMES if n.lower() == word.lower()), None)
                 if right and right != word:
@@ -188,6 +206,14 @@ def render(text, ctx):
     return TOKEN_RE.sub(fill, text)
 
 
+def describe(step, ctx):
+    """A step as it would run, for dry runs and listings. Concurrent commands are shown as
+    `together: [name] command [name] command`."""
+    if isinstance(step, str):
+        return render(step, ctx)
+    return "together: " + " ".join("[%s] %s" % (name, render(cmd, ctx)) for name, cmd in step.items())
+
+
 def environment(event, ctx):
     env = dict(os.environ, PB_HOOK=event, PB_BRANCH=ctx["branch"], PB_BRANCH_SLUG=ctx["branch_slug"],
                PB_DB_NAME=ctx["db_name"], PB_WORKTREE=ctx["worktree"], PB_REPO=ctx["repo"],
@@ -205,7 +231,7 @@ def preview(commands, ctx, sources=None):
     rows = []
     for event in EVENTS:
         if event in commands:
-            row = {"event": event, "commands": [render(text, ctx) for text in commands[event]]}
+            row = {"event": event, "commands": [describe(step, ctx) for step in commands[event]]}
             if sources:
                 row["sources"] = sources[event]
             rows.append(row)
@@ -218,24 +244,77 @@ def label(event_sources, index):
 
 
 def run(event, commands, ctx, cwd, log_path, timeout):
-    """Run the commands one after another, stopping at the first failure. Returns (ok, detail).
+    """Run the steps one after another, stopping at the first failure. Returns (ok, detail).
 
-    Output goes to `log_path`. A command that outlives `timeout` has its whole process group killed.
+    A step is a command, or an object of named commands that start together; such a step waits for
+    all of them and fails if any fails. Output goes to `log_path`. A command that outlives `timeout`
+    has its whole process group killed.
     """
     env = environment(event, ctx)
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    count = 0
     with open(log_path, "w") as log:
-        for number, template in enumerate(commands, 1):
-            cmd = render(template, ctx)
-            log.write("$ %s\n" % cmd)
-            log.flush()
-            proc = procs.spawn(cmd, cwd, env, log)
-            try:
-                code = proc.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                procs.stop_group(proc.pid)
-                proc.poll()
-                return False, "command %d timed out after %ds: %s" % (number, timeout, cmd)
+        for number, step in enumerate(commands, 1):
+            if isinstance(step, str):
+                count += 1
+                ok, detail = run_one(step, ctx, cwd, env, log, timeout)
+                if not ok:
+                    return False, "command %d %s" % (number, detail)
+                continue
+            count += len(step)
+            ok, detail = run_together(step, ctx, cwd, env, log, log_path, timeout)
+            if not ok:
+                return False, "step %d: %s" % (number, detail)
+    return True, "%d command%s ran" % (count, "" if count == 1 else "s")
+
+
+def run_one(template, ctx, cwd, env, log, timeout):
+    cmd = render(template, ctx)
+    log.write("$ %s\n" % cmd)
+    log.flush()
+    proc = procs.spawn(cmd, cwd, env, log)
+    try:
+        code = proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        procs.stop_group(proc.pid)
+        proc.poll()
+        return False, "timed out after %ds: %s" % (timeout, cmd)
+    if code != 0:
+        return False, "exited with code %d: %s" % (code, cmd)
+    return True, ""
+
+
+def run_together(step, ctx, cwd, env, log, log_path, timeout):
+    """Start every named command at once, each writing to its own file, then wait for all of them
+    (sharing one deadline) and append their output to the log in the order they were written."""
+    running = []
+    for name, template in step.items():
+        cmd = render(template, ctx)
+        part = "%s.%s.part" % (log_path, name)
+        out = open(part, "w")
+        running.append((name, cmd, part, out, procs.spawn(cmd, cwd, env, out)))
+    deadline = time.time() + timeout
+    failures = []
+    for name, cmd, part, out, proc in running:
+        try:
+            code = proc.wait(timeout=max(0.0, deadline - time.time()))
+        except subprocess.TimeoutExpired:
+            procs.stop_group(proc.pid)
+            proc.poll()
+            failures.append("[%s] timed out after %ds: %s" % (name, timeout, cmd))
+        else:
             if code != 0:
-                return False, "command %d exited with code %d: %s" % (number, code, cmd)
-    return True, "%d command%s ran" % (len(commands), "" if len(commands) == 1 else "s")
+                failures.append("[%s] exited with code %d: %s" % (name, code, cmd))
+        out.close()
+    for name, cmd, part, _, _ in running:
+        log.write("$ [%s] %s\n" % (name, cmd))
+        with open(part) as fh:
+            log.write(fh.read())
+        try:
+            os.remove(part)
+        except OSError:  # Windows: a killed child may still hold it for a moment
+            pass
+    log.flush()
+    if failures:
+        return False, "; ".join(failures)
+    return True, ""

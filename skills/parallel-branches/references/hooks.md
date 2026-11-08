@@ -20,6 +20,14 @@ They go under `hooks` in `.parallel-branches.json`:
 
 Each event takes one command string or a list of strings. A list runs in order and stops at the first failure.
 
+To run commands at the same time, make a step an object of named commands. It can stand alone or sit in a list:
+
+```json
+{"hooks": {"post_create": ["createdb {db_name}", {"deps": "npm ci", "assets": "make assets"}, "npm run migrate"]}}
+```
+
+Here `deps` and `assets` start together once `createdb` has finished, and `npm run migrate` runs only after both succeeded. A step like that waits for all its commands, even when one fails, and then fails if any of them failed or ran past `hook_timeout` (one deadline for the whole step). Each command's output goes to the event log as one block, labelled `$ [deps] ...`. Names are letters, digits, `-` and `_`. Dry runs and `pb hooks` show the step as `together: [deps] npm ci [assets] make assets`.
+
 ## Events
 
 | Event | Runs | Working directory | If it fails |
@@ -102,7 +110,7 @@ Output goes to `.git/parallel-branches/logs/<branch_slug>.hook-<event>.log`. `st
 
 ## Limits
 
-- Commands in one list run one after another. There is no concurrent form; `background_hooks` only moves the whole `post_start` list off `up`'s path.
+- Only commands inside one step run concurrently; steps, events and branches run one after another. `background_hooks` moves the whole `post_start` list off `up`'s path.
 - A hook command that starts its own background process and leaves it running is not tracked or stopped by `down` (a `background_hooks` run is).  Use a `services` entry for processes that should live as long as the branch.
 - Removing a worktree with `git worktree remove` instead of `pb clean` runs no hooks, so `pre_remove` and `post_remove` never fire.
 - Hooks come from the repository config and the one per-user file. There is no other level, and no per-directory or per-organisation config.

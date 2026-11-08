@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.13.0
+- Concurrent hook commands: a step can be an object of named commands, alone or inside a list (`["createdb {db_name}", {"deps": "npm ci", "assets": "make assets"}, "npm run migrate"]`). They start together; the step waits for all of them, fails if any failed or passed `hook_timeout` (one deadline per step), and the list stops there. Output is logged per command (`$ [deps] ...`). Dry runs and `pb hooks` show `together: [deps] ... [assets] ...`. Strings and lists work as before.
+
 ## 0.12.0
 - Background `post_start`: with `"background_hooks": ["post_start"]` in `.parallel-branches.json`, `up` returns as soon as the servers are healthy and the hook runs in a detached process. The result is recorded when it ends (`pb hooks`: `running in the background`, then `last run ok` or `FAILED`), `down` stops a run that is still going, `pb hook post_start` refuses a second run meanwhile, and the dry run shows `(background)`. Other events cannot be listed.
 

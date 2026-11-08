@@ -47,6 +47,7 @@ A repository can run its own commands at fixed points through `hooks` in `.paral
 - `PB hook EVENT BRANCH` runs one stored hook of a tracked branch by hand (`--dry-run` shows it). Show the dry run and get approval first, as for any hook.
 - `PB hooks [BRANCH] [-v]` shows what a branch stored, with values filled in and the last result of each (read only).
 - With `"background_hooks": ["post_start"]` in the config, `post_start` runs detached: `up` returns once the servers are healthy, and the dry run marks it `(background)`. Check the result later with `PB hooks BRANCH`; `down` stops it if still running.
+- A hook step written as an object of named commands runs them at the same time; the dry run shows it as `together: [name] ...`.
 - `restart` runs no hooks.
 
 ## Commands

@@ -391,6 +391,21 @@ class DetectionCliTests(PbCase):
         self.assertIn("install failed (exit 5)", rows[0]["note"])
         self.assertEqual(json.loads(self.pb("status", "--json").stdout)[0]["live"], "failed")
 
+    def test_ignored_directory_is_listed_in_the_dry_run_then_copied(self):
+        self.add_files({".gitignore": ".cache/\n"})
+        os.makedirs(os.path.join(self.repo, ".cache"))
+        with open(os.path.join(self.repo, ".cache", "warm.bin"), "w") as fh:
+            fh.write("warm")
+        self.add_files({".parallel-branches.json": json.dumps({"copy": [".cache/"]})})
+        proc, rows = self.up("feat-a", extra=("--dry-run",))
+        self.assertEqual(rows[0]["would_copy"], [".cache" + os.sep])
+        self.assertIn("would copy ignored files .cache", self.pb("up", "feat-a", "--cmd", SERVER, "--dry-run").stdout)
+        self.assertFalse(os.path.exists(os.path.join(self.wt, "feat-a")))
+        _, rows = self.up("feat-a")
+        self.assertEqual(rows[0]["copied_env"], [".cache" + os.sep])
+        with open(os.path.join(rows[0]["path"], ".cache", "warm.bin")) as fh:
+            self.assertEqual(fh.read(), "warm")
+
     def test_ignored_env_file_is_copied_into_new_worktree(self):
         self.add_files({".gitignore": ".env\n"})
         with open(os.path.join(self.repo, ".env"), "w") as fh:

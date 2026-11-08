@@ -485,6 +485,9 @@ def up_one(args, state, state_dir, main, base_dir, branch):
                        + ("" if known else " (stack and warnings read from the main checkout)")}
         if multi:
             row["services"] = rows
+        if known is None:  # a new worktree gets the ignored files; an existing one is left as it is
+            row["would_copy"] = stacks.copy_plan(main, os.path.join(base_dir, slugify(branch)),
+                                                 repo_cfg.get("copy") or [])
         if hook_cmds:
             where = known or os.path.join(base_dir, slugify(branch))
             row["hook_preview"] = hooks.preview(hook_cmds, hooks.context(branch, slugify(branch), where, main,
@@ -1058,6 +1061,8 @@ def print_results(results, as_json):
             print("%s: %s" % (name, r["install"]))
         if r.get("copied_env"):
             print("%s: copied env files %s" % (name, ", ".join(r["copied_env"])))
+        if r.get("would_copy"):
+            print("%s: would copy ignored files %s" % (name, ", ".join(r["would_copy"])))
         if r.get("note"):
             print("%s: %s" % (name, r["note"]))
         if r.get("log") and r.get("healthy"):

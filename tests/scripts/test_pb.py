@@ -400,6 +400,58 @@ class DetectionCliTests(PbCase):
         with open(os.path.join(rows[0]["path"], ".env")) as fh:
             self.assertEqual(fh.read(), "SECRET=1")
 
+    def test_shared_database_warning_dry_run_and_real_up(self):
+        self.add_files({".gitignore": ".env\n.env.local\n",
+                        ".env.example": "DATABASE_URL=not-copied\n"})
+        content = "DATABASE_URL=postgres://u:synthetic-password@db/x\nCACHE=redis://db\n"
+        with open(os.path.join(self.repo, ".env"), "w") as fh:
+            fh.write(content)
+        expected = [{"file": ".env", "variable": key} for key in ("DATABASE_URL", "CACHE")]
+        proc, dry = self.up("feat-a", "feat-b", extra=("--dry-run",))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual([row["shared_database"] for row in dry], [expected, expected])
+        self.assertNotIn("synthetic-password", proc.stdout)
+        self.assertFalse(os.path.exists(self.wt))
+        text = self.pb("up", "feat-a", "feat-b", "--cmd", SERVER, "--dry-run").stdout
+        self.assertEqual(text.count("WARNING copied database"), 2)
+        self.assertIn(".env (DATABASE_URL)", text)
+        self.assertNotIn("synthetic-password", text)
+        proc, actual = self.up("feat-a", "feat-b")
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertEqual([row["shared_database"] for row in actual], [expected, expected])
+        self.assertNotIn("synthetic-password", proc.stdout)
+        for row in actual:
+            self.assertTrue(http_ok(row["port"]))
+            with open(os.path.join(row["path"], ".env")) as fh:
+                self.assertEqual(fh.read(), content)
+        with open(self.state_path()) as fh:
+            self.assertNotIn("synthetic-password", fh.read())
+
+    def test_shared_database_restart_rescans_copied_files(self):
+        self.add_files({".gitignore": ".env\n"})
+        with open(os.path.join(self.repo, ".env"), "w") as fh:
+            fh.write("DATABASE_URL=postgres://db/x\n")
+        _, first = self.up("feat-a")
+        self.pb("down", "feat-a")
+        _, dry = self.up("feat-a", extra=("--dry-run",))
+        _, restarted = self.up("feat-a")
+        self.assertEqual(restarted[0]["shared_database"], first[0]["shared_database"])
+        self.assertEqual(dry[0]["shared_database"], first[0]["shared_database"])
+        self.pb("down", "feat-a")
+        with open(os.path.join(first[0]["path"], ".env"), "w") as fh:
+            fh.write("PORT=3000\n")
+        _, rescanned = self.up("feat-a")
+        self.assertEqual(rescanned[0]["shared_database"], [])
+
+    def test_no_shared_database_warning_for_ordinary_copied_env(self):
+        self.add_files({".gitignore": ".env\n"})
+        with open(os.path.join(self.repo, ".env"), "w") as fh:
+            fh.write("PORT=3000\n")
+        for extra in (("--dry-run",), ()):
+            proc, rows = self.up("feat-a", extra=extra)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(rows[0]["shared_database"], [])
+
     def test_hardcoded_urls_raise_cors_risk_and_auth_warning(self):
         self.add_files({".env.example": "API=http://localhost:9999\nREDIRECT_URI=http://localhost:4200/cb\n"})
         self.git("branch", "dev-a")

@@ -507,11 +507,8 @@ def git_ignored(repo, relpath):
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
 
 
-def copy_env_files(main, path, extra_patterns=()):
-    """Copy git-ignored .env files (and .worktreeinclude / config patterns) into a new worktree.
-
-    Never overwrites, and never copies a file git would track. Returns the relative names copied.
-    """
+def copy_plan(main, path, extra_patterns=()):
+    """List files eligible for copying, without writing."""
     patterns = [name for name in sorted(os.listdir(main)) if name == ".env" or name.startswith(".env.")]
     for line in read_text(os.path.join(main, ".worktreeinclude")).splitlines():
         line = line.strip()
@@ -524,15 +521,53 @@ def copy_env_files(main, path, extra_patterns=()):
             if not os.path.isfile(source):
                 continue
             rel = os.path.relpath(source, main)
-            dest = os.path.join(path, rel)
-            if rel.startswith("..") or os.path.exists(dest) or rel in copied:
+            if rel.startswith("..") or os.path.exists(os.path.join(path, rel)) or rel in copied:
                 continue
             if not git_ignored(main, rel):
                 continue
-            os.makedirs(os.path.dirname(dest) or path, exist_ok=True)
-            shutil.copy2(source, dest)
             copied.append(rel)
     return copied
+
+
+def copy_env_files(main, path, extra_patterns=()):
+    """Copy eligible files without overwriting existing files or copying tracked files."""
+    copied = copy_plan(main, path, extra_patterns)
+    for rel in copied:
+        dest = os.path.join(path, rel)
+        os.makedirs(os.path.dirname(dest) or path, exist_ok=True)
+        shutil.copy2(os.path.join(main, rel), dest)
+    return copied
+
+
+def shared_database_variables(path, files):
+    """Return only file/variable names, never connection values or evaluated dotenv content."""
+    found = []
+    keys = {"DATABASE_URL", "DB_URL", "MONGO_URI", "MONGODB_URI", "REDIS_URL"}
+    assignment = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$")
+    schemes = ("postgres://", "postgresql://", "mysql://", "mongodb://", "mongodb+srv://",
+               "redis://", "rediss://")
+    for rel in sorted(set(files)):
+        name = os.path.basename(rel)
+        if not (name == ".env" or name.startswith(".env.") or name.endswith(".env")):
+            continue
+        for line in read_text(os.path.join(path, rel)).splitlines():
+            match = assignment.match(line)
+            if not match:
+                continue
+            key, value = match.groups()
+            value = value.strip()
+            if not value or value.startswith("#"):
+                continue
+            if value[0] in ("\"", "'"):
+                quote = value[0]
+                value = value[1:].split(quote, 1)[0]
+            if not value.strip():
+                continue
+            if key.upper() in keys or value.lower().startswith(schemes):
+                item = {"file": rel, "variable": key}
+                if item not in found:
+                    found.append(item)
+    return found
 
 
 # --------------------------------------------------------------- risk scanning

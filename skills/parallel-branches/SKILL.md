@@ -70,6 +70,7 @@ A repository can run its own commands at fixed points through `hooks` in `.paral
 - **Low confidence stack** (Create React App, Go, an unknown Node project): only the `PORT` variable is set. If the server ignores it, the health check times out. Find the right port flag and pass `--cmd`.
 - **`port N is answered by another process`**: something else owns the port. Use `--no-verify-owner` only for servers that daemonize on purpose, such as Docker.
 - **`WARNING file:line url [other-local-port]`**: the app has a hardcoded URL that will not match the new port. A dev-mode browser does not fix lines marked auth/redirect: OAuth and OIDC redirect URIs, `Origin` checks and shared cookies are server-side or cookie problems. Tell the user plainly.
+- **`WARNING copied database settings`**: separate ports do not isolate databases. This warning lists only file and variable names from copied env files, not values. It points to the per-branch hooks workaround in `references/stacks.md`; env values are not rewritten.
 - **More than one stack found**: `detect` lists `alternatives`. Ask which one to run.
 
 ## Rules

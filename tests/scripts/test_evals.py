@@ -201,6 +201,22 @@ class OracleTests(unittest.TestCase):
     def failed(self, results):
         return sorted(r["check"] for r in results if not r["passed"])
 
+    def test_shared_database_plan_reports_warning_without_values(self):
+        commands = [lambda r: cmd(r, "up feat-a feat-b --dry-run")]
+        results, _ = self.play("shared-database-warning", commands,
+                               "Plan: two ports. WARNING .env (DATABASE_URL): shared database settings. "
+                               "Use per-branch hooks. May I start them?")
+        self.assertEqual(self.failed(results), [], self.output)
+        self.assertEqual(self.output.count("WARNING copied database settings"), 2)
+        self.assertNotIn("synthetic-secret", self.output)
+        self.tearDown_state()
+        results, _ = self.play("shared-database-warning", commands, "Plan: two ports. May I start them?")
+        self.assertIn("final_mentions", self.failed(results))
+        self.tearDown_state()
+        results, _ = self.play("shared-database-warning", commands,
+                               ".env DATABASE_URL shared database synthetic-secret")
+        self.assertIn("final_mentions", self.failed(results))
+
     def test_side_by_side_oracle_passes(self):
         results, _ = self.play("side-by-side", [
             lambda r: cmd(r, "up feat-a feat-b --dry-run --json"),

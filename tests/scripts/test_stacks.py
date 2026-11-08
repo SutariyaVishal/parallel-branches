@@ -257,6 +257,25 @@ class EnvCopyTests(TmpCase):
         self.assertEqual(stacks.copy_env_files(self.main, self.wt, ["local.json"]), ["local.json"])
 
 
+class SharedDatabaseTests(TmpCase):
+    def test_names_and_schemes_without_values_or_duplicates(self):
+        self.write(".env", "export DATABASE_URL='synthetic-secret'\nCUSTOM=postgres://u:synthetic-secret@db/x\n"
+                   "MONGO_URI=mongodb://db/x\nCUSTOM=postgres://db/x\nREDIS_URL=redis://db\n")
+        self.assertEqual(stacks.shared_database_variables(self.dir, [".env", ".env"]), [
+            {"file": ".env", "variable": key} for key in ("DATABASE_URL", "CUSTOM", "MONGO_URI", "REDIS_URL")])
+
+    def test_ordinary_comments_non_env_and_missing_files_are_ignored(self):
+        self.write(".env", "# DATABASE_URL=secret\nTEXT=contains postgres://example\nPORT=3000\n"
+                   "DATABASE_URL=\nDB_URL= # comment\nREDIS_URL=\"\"\nMONGO_URI=''\n")
+        self.write("local.json", "DATABASE_URL=secret")
+        self.assertEqual(stacks.shared_database_variables(self.dir, [".env", "local.json", ".env.missing"]), [])
+
+    def test_nested_env_and_other_schemes(self):
+        self.write("config/local.env", "A=\"mysql://db/x\"\nB=mongodb+srv://db/x\nC=rediss://db\nD=postgresql://db\n")
+        self.assertEqual([w["variable"] for w in stacks.shared_database_variables(self.dir, ["config/local.env"])],
+                         ["A", "B", "C", "D"])
+
+
 class RiskScanTests(TmpCase):
     def test_other_local_port_is_flagged_and_own_port_is_not(self):
         self.write(".env", "API=http://localhost:9999/v1\nSELF=http://localhost:4500\n")

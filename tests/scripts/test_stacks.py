@@ -229,6 +229,16 @@ class InstallPlanTests(TmpCase):
         self.assertIn("exit 4", note)
 
 
+class EncodingTests(TmpCase):
+    # "Á" is C3 81 in UTF-8; 0x81 is undefined in cp1252, so a default-encoding read fails on Windows.
+    def test_json_and_text_are_read_as_utf8(self):
+        path = os.path.join(self.dir, "package.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write('{"name": "demo", "description": "\u00c1\u2713"}')
+        self.assertEqual(stacks.read_json(path)["description"], "\u00c1\u2713")
+        self.assertIn("\u00c1\u2713", stacks.read_text(path))
+
+
 class EnvCopyTests(TmpCase):
     def setUp(self):
         super().setUp()

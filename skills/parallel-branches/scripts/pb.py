@@ -271,7 +271,7 @@ def check_health(entry, path="/", verify_owner=True, mode="http"):
 
 def tail(path, lines=15):
     try:
-        with open(path, errors="replace") as fh:
+        with open(path, encoding="utf-8", errors="replace") as fh:
             return "".join(fh.readlines()[-lines:]).rstrip()
     except OSError:
         return ""

@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -72,6 +73,18 @@ class RenderTests(unittest.TestCase):
         self.assertNotEqual(a, b)
         for name in (a, b, hooks.db_name("Ünï/cødé!!"), hooks.db_name("///")):
             self.assertRegex(name, r"^[a-z0-9_]+$")
+
+
+class HookLogEncodingTests(unittest.TestCase):
+    def test_a_command_with_characters_outside_the_code_page_runs_and_is_logged(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        log = os.path.join(tmp, "hook.log")
+        ctx = hooks.context("feat-a", "feat-a", tmp, tmp, {None: (4100, 4101)}, None)
+        ok, detail = hooks.run("post_create", ["echo \u00c1\u2713"], ctx, tmp, log, 30)
+        self.assertTrue(ok, detail)
+        with open(log, encoding="utf-8", errors="replace") as fh:
+            self.assertIn("$ echo \u00c1\u2713", fh.read())
 
 
 class UserConfigUnitTests(unittest.TestCase):

@@ -224,7 +224,7 @@ def run(event, commands, ctx, cwd, log_path, timeout):
     """
     env = environment(event, ctx)
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
-    with open(log_path, "w") as log:
+    with open(log_path, "w", encoding="utf-8") as log:  # a command may hold characters the code page lacks
         for number, template in enumerate(commands, 1):
             cmd = render(template, ctx)
             log.write("$ %s\n" % cmd)

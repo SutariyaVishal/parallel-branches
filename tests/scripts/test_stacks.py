@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 SCRIPTS = os.path.join(ROOT, "skills", "parallel-branches", "scripts")
@@ -306,6 +307,34 @@ class SharedDatabaseTests(TmpCase):
         self.assertEqual(stacks.shared_database_variables(self.dir, files), [
             {"file": os.path.join("config", ".envrc"), "variable": "CUSTOM"},
             {"file": os.path.join("config", "nested", ".env"), "variable": "DB_NAME"}])
+
+    def test_copied_directory_scan_prunes_dependency_and_cache_directories(self):
+        self.write("config/.local/.env", "DB_NAME=synthetic")
+        self.write("config/app/.env", "DB_NAME=synthetic")
+        for name in stacks.SKIP_DIRS:
+            self.write(os.path.join("config", name, "nested", ".env"), "DB_NAME=synthetic")
+        with mock.patch.object(stacks.os, "scandir", wraps=os.scandir) as scandir:
+            warnings = stacks.shared_database_variables(self.dir, ["config" + os.sep])
+        self.assertEqual(warnings, [
+            {"file": os.path.join("config", ".local", ".env"), "variable": "DB_NAME"},
+            {"file": os.path.join("config", "app", ".env"), "variable": "DB_NAME"}])
+        visited = [os.path.relpath(call.args[0], self.dir).split(os.sep) for call in scandir.call_args_list]
+        self.assertFalse(any(stacks.SKIP_DIRS.intersection(parts) for parts in visited))
+
+    def test_explicit_copied_dependency_directories_are_not_walked(self):
+        for name in ("node_modules", ".venv"):
+            self.write(os.path.join(name, "nested", ".env"), "DB_NAME=synthetic")
+            self.write(os.path.join("config", name, "nested", ".env"), "DB_NAME=synthetic")
+            for rel in (name, os.path.join("config", name), os.path.join(name, "nested")):
+                with self.subTest(directory=rel), mock.patch.object(stacks.os, "walk", wraps=os.walk) as walk:
+                    self.assertEqual(stacks.shared_database_variables(self.dir, [rel + os.sep]), [])
+                    walk.assert_not_called()
+
+    def test_explicit_env_file_in_dependency_directory_is_still_scanned(self):
+        rel = os.path.join("node_modules", "example", ".env")
+        self.write(rel, "DB_NAME=synthetic")
+        self.assertEqual(stacks.shared_database_variables(self.dir, [rel]),
+                         [{"file": rel, "variable": "DB_NAME"}])
 
     @unittest.skipUnless(hasattr(os, "symlink"), "symlinks unavailable")
     def test_scan_does_not_follow_file_directory_or_ancestor_symlinks(self):

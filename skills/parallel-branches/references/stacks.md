@@ -51,6 +51,8 @@ When a worktree is created, git-ignored `.env` and `.env.*` files, and anything 
 Separate ports do not isolate databases. `up` and `up --dry-run` warn once per branch
 when env files copied from the main checkout contain common database variable names
 or database URL schemes. The warning lists file and variable names, never their values.
+Directory scans skip dependency and build/cache directories such as `node_modules`, `.venv`, and `dist`,
+even when those directories are copied explicitly. Explicitly copied env files are still checked.
 It is a heuristic, not a guarantee that all shared state is detected. Values are not rewritten.
 
 Use hooks for per-branch databases, for example:

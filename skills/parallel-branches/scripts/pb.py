@@ -1028,7 +1028,7 @@ def cmd_clean(args):
                         srcs = (entry.get("hook_sources") or {}).get(event)
                         for n, text in enumerate((entry.get("hooks") or {}).get(event, [])):
                             print("%s: would %s run hook %s%s: %s"
-                                  % (branch, when, event, hooks.label(srcs, n), hooks.render(text, ctx)))
+                                  % (branch, when, event, hooks.label(srcs, n), hooks.describe(text, ctx)))
                 continue
             if not args.no_hooks and run_hook(entry, "pre_remove", main, state_dir, results):
                 report_hook(branch, results[0])
@@ -1068,7 +1068,7 @@ def cmd_hook(args):
             ctx = hooks.context_from_entry(entry, main, slugify(args.branch))
             srcs = (entry.get("hook_sources") or {}).get(args.event)
             for n, text in enumerate(commands):
-                print("%s: hook %s%s: %s" % (args.branch, args.event, hooks.label(srcs, n), hooks.render(text, ctx)))
+                print("%s: hook %s%s: %s" % (args.branch, args.event, hooks.label(srcs, n), hooks.describe(text, ctx)))
             return 0
         timeout = args.hook_timeout or entry.get("hook_timeout")
         results = []
@@ -1103,7 +1103,7 @@ def cmd_hooks(args):
         for event in hooks.EVENTS:
             if event in stored:
                 rows.append({"event": event, "templates": stored[event],
-                             "commands": [hooks.render(t, ctx) for t in stored[event]],
+                             "commands": [hooks.describe(t, ctx) for t in stored[event]],
                              "sources": (entry.get("hook_sources") or {}).get(event),
                              "last_run": (entry.get("hook_runs") or {}).get(event)})
         out.append({"branch": name, "variables": variables, "hooks": rows})

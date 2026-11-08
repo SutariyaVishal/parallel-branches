@@ -328,8 +328,10 @@ def run_together(step, ctx, cwd, env, log, log_path, timeout):
         out.close()
     for name, cmd, part, _, _ in running:
         log.write("$ [%s] %s\n" % (name, cmd))
-        with open(part, errors="replace") as fh:  # tools may print bytes the locale cannot decode
-            log.write(fh.read())
+        log.flush()
+        with open(part, "rb") as fh:  # copy bytes as they are: output need not be in the locale's encoding
+            log.buffer.write(fh.read())
+        log.buffer.flush()
         remove_quietly(part)
     log.flush()
     if failures:

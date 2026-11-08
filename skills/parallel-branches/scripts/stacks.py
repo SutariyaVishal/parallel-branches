@@ -508,65 +508,119 @@ def git_ignored(repo, relpath):
 
 
 def copy_plan(main, path, extra_patterns=()):
-    """List files eligible for copying, without writing."""
+    """What `copy_env_files` would copy into `path`: relative names, directories with a trailing separator.
+
+    Patterns are the `.env` files, `.worktreeinclude` lines and `extra_patterns`; a trailing slash is allowed.
+    Only git-ignored files and git-ignored directories match, and anything already in `path` is left alone.
+    """
     patterns = [name for name in sorted(os.listdir(main)) if name == ".env" or name.startswith(".env.")]
     for line in read_text(os.path.join(main, ".worktreeinclude")).splitlines():
         line = line.strip()
         if line and not line.startswith("#"):
             patterns.append(line)
     patterns.extend(extra_patterns)
-    copied = []
+    planned = []
     for pattern in patterns:
-        for source in sorted(glob.glob(os.path.join(main, pattern), recursive=True)):
-            if not os.path.isfile(source):
-                continue
+        for source in sorted(glob.glob(os.path.join(main, pattern.rstrip("/\\")), recursive=True)):
             rel = os.path.relpath(source, main)
-            if rel.startswith("..") or os.path.exists(os.path.join(path, rel)) or rel in copied:
+            is_dir = os.path.isdir(source) and not os.path.islink(source)
+            if rel.startswith("..") or not (is_dir or os.path.isfile(source)):
                 continue
-            if not git_ignored(main, rel):
+            name = rel + os.sep if is_dir else rel
+            if os.path.exists(os.path.join(path, rel)) or name in planned:
                 continue
-            copied.append(rel)
-    return copied
+            if any(name.startswith(done) for done in planned if done.endswith(os.sep)):
+                continue  # inside a directory that is already being copied
+            if git_ignored(main, rel):
+                planned.append(name)
+    return planned
 
 
 def copy_env_files(main, path, extra_patterns=()):
-    """Copy eligible files without overwriting existing files or copying tracked files."""
-    copied = copy_plan(main, path, extra_patterns)
-    for rel in copied:
-        dest = os.path.join(path, rel)
+    """Copy git-ignored files and directories (the `.env` files, `.worktreeinclude`, config patterns) into
+    a new worktree. Directories are cloned copy-on-write where the filesystem allows it.
+
+    Never overwrites, and never copies what git would track. Returns the names copied (see `copy_plan`).
+    """
+    copied = []
+    for name in copy_plan(main, path, extra_patterns):
+        rel = name.rstrip(os.sep)
+        source, dest = os.path.join(main, rel), os.path.join(path, rel)
         os.makedirs(os.path.dirname(dest) or path, exist_ok=True)
-        shutil.copy2(os.path.join(main, rel), dest)
+        if name.endswith(os.sep):
+            if not clone_directory(source, dest):
+                shutil.rmtree(dest, ignore_errors=True)  # partial clone; copy the slow way
+                shutil.copytree(source, dest, symlinks=True)
+        else:
+            shutil.copy2(source, dest)
+        copied.append(name)
     return copied
 
 
-def shared_database_variables(path, files):
-    """Return only file/variable names, never connection values or evaluated dotenv content."""
-    found = []
-    keys = {"DATABASE_URL", "DB_URL", "MONGO_URI", "MONGODB_URI", "REDIS_URL"}
-    assignment = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$")
-    schemes = ("postgres://", "postgresql://", "mysql://", "mongodb://", "mongodb+srv://",
-               "redis://", "rediss://")
-    for rel in sorted(set(files)):
-        name = os.path.basename(rel)
-        if not (name == ".env" or name.startswith(".env.") or name.endswith(".env")):
+def copied_env_paths(path, files):
+    """Expand copied directories without following links or leaving the worktree."""
+    def safe(rel):
+        if os.path.isabs(rel):
+            return False
+        parts = os.path.normpath(rel).split(os.sep)
+        if parts[0] == "..":
+            return False
+        current = path
+        for part in parts:
+            current = os.path.join(current, part)
+            if os.path.islink(current):
+                return False
+        return True
+
+    found = set()
+    for rel in files:
+        rel = os.path.normpath(rel)
+        if not safe(rel):
             continue
-        for line in read_text(os.path.join(path, rel)).splitlines():
-            match = assignment.match(line)
-            if not match:
-                continue
-            key, value = match.groups()
-            value = value.strip()
-            if not value or value.startswith("#"):
-                continue
-            if value[0] in ("\"", "'"):
-                quote = value[0]
-                value = value[1:].split(quote, 1)[0]
+        full = os.path.join(path, rel)
+        candidates = [rel]
+        if os.path.isdir(full):
+            candidates = []
+            for root, dirs, names in os.walk(full, followlinks=False):
+                dirs[:] = sorted(d for d in dirs if not os.path.islink(os.path.join(root, d)))
+                candidates.extend(os.path.relpath(os.path.join(root, name), path) for name in sorted(names))
+        for candidate in candidates:
+            name = os.path.basename(candidate)
+            if (name in (".env", ".envrc") or name.startswith(".env.") or name.endswith(".env")) and safe(candidate):
+                found.add(candidate)
+    return sorted(found)
+
+
+def env_assignments(filename):
+    """Read literal assignments only, never execute shell code or expand references."""
+    assignment = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$")
+    values = {}
+    for line in read_text(filename).splitlines():
+        match = assignment.match(line)
+        if not match:
+            continue
+        key, value = match.groups()
+        value = value.strip()
+        if value.startswith("#"):
+            value = ""
+        elif value and value[0] in ("\"", "'"):
+            value = value[1:].split(value[0], 1)[0]
+        values[key] = value
+    return values
+
+
+def shared_database_variables(path, files):
+    """Return file/variable names only; database identity and isolation are not inferred."""
+    found = []
+    keys = {"DATABASE_URL", "DB_URL", "MONGO_URI", "MONGODB_URI", "REDIS_URL",
+            "DB_NAME", "DB_DATABASE", "PGDATABASE", "POSTGRES_DB", "MYSQL_DATABASE"}
+    scheme = re.compile(r"^(jdbc:)?(postgres(ql)?|mysql|mariadb|mongodb(\+srv)?|rediss?)(\+\w+)?://", re.I)
+    for rel in copied_env_paths(path, files):
+        for key, value in env_assignments(os.path.join(path, rel)).items():
             if not value.strip():
                 continue
-            if key.upper() in keys or value.lower().startswith(schemes):
-                item = {"file": rel, "variable": key}
-                if item not in found:
-                    found.append(item)
+            if key.upper() in keys or scheme.match(value):
+                found.append({"file": rel, "variable": key})
     return found
 
 

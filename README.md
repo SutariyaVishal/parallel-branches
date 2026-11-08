@@ -8,7 +8,7 @@ Run several git branches side by side, each with its own dev server on its own p
 
 It is an [agent skill](https://agentskills.io) in the open `SKILL.md` format, built around one dependency-free Python script, `pb.py`. It has only been tried with Claude Code. Other agents that read `SKILL.md` (Codex, Gemini CLI, Cursor and others) should be able to use it, but that is untested. You can also use the script on its own.
 
-> **Status: beta (v0.9.0).** Tested in CI on Linux, macOS and Windows with Python 3.9 and newer. Port handling was measured against real Vite, Flask and plain Node servers; the other stacks follow each tool's documentation. See [Limits](#limits).
+> **Status: beta (v0.10.0).** Tested in CI on Linux, macOS and Windows with Python 3.9 and newer. Port handling was measured against real Vite, Flask and plain Node servers; the other stacks follow each tool's documentation. See [Limits](#limits).
 
 ## The problem
 
@@ -210,7 +210,7 @@ python3 -m unittest discover tests/scripts      # unit and CLI tests (about thre
 ruff check .                                    # lint
 ```
 
-Behaviour of the skill with real models is checked by `tests/evals/` (nine scenarios, graded by deterministic rules). See [CONTRIBUTING.md](CONTRIBUTING.md) for how to add a stack and how to run the evals, which spend API money. [docs/DESIGN.md](docs/DESIGN.md) records the design decisions, measurements and known gaps, and [CHANGELOG.md](CHANGELOG.md) the releases. Everyone taking part is asked to follow the [code of conduct](CODE_OF_CONDUCT.md).
+Behaviour of the skill with real models is checked by `tests/evals/` (ten scenarios, graded by deterministic rules). See [CONTRIBUTING.md](CONTRIBUTING.md) for how to add a stack and how to run the evals, which spend API money. [docs/DESIGN.md](docs/DESIGN.md) records the design decisions, measurements and known gaps, and [CHANGELOG.md](CHANGELOG.md) the releases. Everyone taking part is asked to follow the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## License
 

@@ -488,6 +488,8 @@ def up_one(args, state, state_dir, main, base_dir, branch):
         row["shared_database"] = stacks.shared_database_variables(path, copied)
         if multi:
             row["services"] = rows
+        if known is None:  # a new worktree gets the ignored files; an existing one is left as it is
+            row["would_copy"] = copied
         if hook_cmds:
             where = known or os.path.join(base_dir, slugify(branch))
             row["hook_preview"] = hooks.preview(hook_cmds, hooks.context(branch, slugify(branch), where, main,
@@ -528,7 +530,6 @@ def up_one(args, state, state_dir, main, base_dir, branch):
         previous = (existing or {}).get("copied_env", []) if existing and existing.get("path") == path else []
         copied = stacks.copy_env_files(main, path, repo_cfg.get("copy") or [])
         entry["copied_env"] = list(dict.fromkeys(previous + copied))
-    entry["shared_database"] = stacks.shared_database_variables(path, entry.get("copied_env", []))
     own_ports = {p for pair in ports.values() for p in pair}
     risks = stacks.scan_risks(path, own_ports)
     entry["cors_risk"], entry["warnings"] = risks["cors_risk"], list(risks["findings"])
@@ -557,6 +558,7 @@ def up_one(args, state, state_dir, main, base_dir, branch):
     stopped = stopped_by_hook("post_create") if new_now else None
     if stopped:
         return stopped
+    entry["shared_database"] = stacks.shared_database_variables(path, entry.get("copied_env", []))
     for svc, svc_dir, st in prepared:
         name = svc["name"]
         if st["install"]:
@@ -1064,6 +1066,8 @@ def print_results(results, as_json):
             print("%s: %s" % (name, r["install"]))
         if r.get("copied_env"):
             print("%s: copied env files %s" % (name, ", ".join(r["copied_env"])))
+        if r.get("would_copy"):
+            print("%s: would copy ignored files %s" % (name, ", ".join(r["would_copy"])))
         if r.get("note"):
             print("%s: %s" % (name, r["note"]))
         if r.get("log") and r.get("healthy"):
@@ -1071,7 +1075,7 @@ def print_results(results, as_json):
         if r.get("shared_database"):
             names = ", ".join("%s (%s)" % (w["file"], w["variable"]) for w in r["shared_database"])
             print("%s: WARNING copied database settings may be shared across branches: %s; "
-                  "use post_create/post_remove hooks for per-branch databases (see references/stacks.md)"
+                  "use post_create/post_remove hooks for per-branch databases"
                   % (name, names))
         remote = {}
         for w in r.get("warnings") or []:

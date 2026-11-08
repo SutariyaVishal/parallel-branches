@@ -44,7 +44,7 @@ Each branch gets a preferred port from a hash of its name (4000-4999) and probes
 
 ## Environment files
 
-When a worktree is created, git-ignored `.env` and `.env.*` files, and anything listed in `.worktreeinclude` or the config `copy` list, are copied from the main checkout. Existing files are never overwritten, and tracked files are never copied.
+When a worktree is created, git-ignored `.env` and `.env.*` files, and anything listed in `.worktreeinclude` or the config `copy` list, are copied from the main checkout. A pattern may also name a git-ignored directory (`.cache/`, `out/`): it is cloned whole, copy-on-write where the filesystem allows it, which carries warm build caches across. Existing files and directories are never overwritten, and tracked files and directories are never copied. `up --dry-run` lists what a new worktree would get.
 
 ## Shared state
 
@@ -61,8 +61,9 @@ Use hooks for per-branch databases, for example:
 
 `post_create` runs after env copying and before install. Also update the worktree's env
 to use that database in your hook; that step depends on your project and is not included
-above. Review hook commands before running them. The warning describes copied settings
-before hooks run, so a hook that isolates them can make the warning no longer apply.
+above. Review hook commands before running them. Real starts inspect copied settings after `post_create` succeeds; dry runs inspect
+before hooks run. A rewritten database URL or name still triggers the heuristic:
+changed text does not prove isolation. This is not a database connectivity or identity check.
 
 ## `.parallel-branches.json`
 
@@ -84,7 +85,7 @@ Optional, at the repository root. The worktree's copy wins over the main checkou
 | `install` | A shell command, or `false` to skip installing. |
 | `env` | Extra environment variables. Values may use `{PORT}` and `{HMR_PORT}`. |
 | `health_path` | Path requested during the health check. Default `/`. |
-| `copy` | Extra glob patterns of git-ignored files to copy into new worktrees. |
+| `copy` | Extra glob patterns of git-ignored files or directories to copy into new worktrees (a trailing `/` is fine). |
 | `hooks` | Commands run at fixed points of a branch's life. See `hooks.md`. |
 | `hook_timeout` | Seconds allowed per hook command. Default 120. |
 | `services` | Several processes for one branch. See below. When present, the top-level `cmd`, `install`, `env` and `health_path` are not used for starting. |

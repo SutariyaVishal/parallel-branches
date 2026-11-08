@@ -256,8 +256,70 @@ class EnvCopyTests(TmpCase):
         self.write("local.json", "{}", self.main)
         self.assertEqual(stacks.copy_env_files(self.main, self.wt, ["local.json"]), ["local.json"])
 
+    def test_ignored_directories_are_copied_whole_and_tracked_ones_are_not(self):
+        self.write(".gitignore", ".cache/\n", self.main)
+        self.write(".cache/a/b.bin", "x", self.main)
+        self.write("src/keep.txt", "t", self.main)  # not ignored: tracked content, never copied
+        self.write(".worktreeinclude", ".cache/\nsrc\n.cache/a/b.bin\n", self.main)
+        copied = stacks.copy_env_files(self.main, self.wt)
+        self.assertEqual(copied, [".cache" + os.sep])  # the file inside is not listed again
+        self.assertTrue(os.path.isfile(os.path.join(self.wt, ".cache", "a", "b.bin")))
+        self.assertFalse(os.path.exists(os.path.join(self.wt, "src")))
+
+    def test_plan_changes_nothing_and_matches_what_is_copied(self):
+        self.write(".gitignore", ".env\nout/\n", self.main)
+        self.write(".env", "A=1", self.main)
+        self.write("out/x", "1", self.main)
+        plan = stacks.copy_plan(self.main, self.wt, ["out/"])
+        self.assertEqual(plan, [".env", "out" + os.sep])
+        self.assertEqual(os.listdir(self.wt), [])
+        self.assertEqual(stacks.copy_env_files(self.main, self.wt, ["out/"]), plan)
+
+    def test_existing_directory_in_the_worktree_is_left_alone(self):
+        self.write(".gitignore", "out/\n", self.main)
+        self.write("out/x", "main", self.main)
+        self.write("out/x", "mine", self.wt)
+        self.assertEqual(stacks.copy_env_files(self.main, self.wt, ["out/"]), [])
+        with open(os.path.join(self.wt, "out", "x")) as fh:
+            self.assertEqual(fh.read(), "mine")
+
 
 class SharedDatabaseTests(TmpCase):
+    def test_driver_jdbc_and_mariadb_schemes(self):
+        for url in ("postgresql+psycopg://db/x", "postgresql+asyncpg://db/x", "mysql+pymysql://db/x",
+                    "jdbc:postgresql://db/x", "jdbc:mysql://db/x", "mariadb://db/x"):
+            with self.subTest(url=url):
+                self.write(".env", "CUSTOM=" + url)
+                self.assertEqual(stacks.shared_database_variables(self.dir, [".env"]),
+                                 [{"file": ".env", "variable": "CUSTOM"}])
+
+    def test_database_name_keys_but_not_host_only_settings(self):
+        keys = ("DB_NAME", "DB_DATABASE", "PGDATABASE", "POSTGRES_DB", "MYSQL_DATABASE")
+        self.write(".envrc", "export DB_HOST=localhost\n" + "\n".join(key + "=synthetic" for key in keys))
+        self.assertEqual([w["variable"] for w in stacks.shared_database_variables(self.dir, [".envrc"])], list(keys))
+
+    def test_copied_directories_expand_env_files_and_deduplicate(self):
+        self.write("config/nested/.env", "DB_NAME=synthetic")
+        self.write("config/.envrc", "export CUSTOM=jdbc:mysql://db/x")
+        self.write("config/not-env.txt", "DATABASE_URL=postgres://db/x")
+        files = ["config" + os.sep, os.path.join("config", "nested", ".env")]
+        self.assertEqual(stacks.shared_database_variables(self.dir, files), [
+            {"file": os.path.join("config", ".envrc"), "variable": "CUSTOM"},
+            {"file": os.path.join("config", "nested", ".env"), "variable": "DB_NAME"}])
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "symlinks unavailable")
+    def test_scan_does_not_follow_file_directory_or_ancestor_symlinks(self):
+        self.write("elsewhere/.env", "DATABASE_URL=postgres://synthetic/x")
+        self.write("config/.env", "PORT=3000")
+        try:
+            os.symlink(os.path.join(self.dir, "elsewhere"), os.path.join(self.dir, "config", "link"),
+                       target_is_directory=True)
+            os.symlink(os.path.join(self.dir, "elsewhere", ".env"), os.path.join(self.dir, "config", ".env.link"))
+        except OSError as exc:
+            self.skipTest(str(exc))
+        self.assertEqual(stacks.shared_database_variables(self.dir, ["config/", "config/link/.env",
+                                                                    "config/.env.link", "../elsewhere/.env"]), [])
+
     def test_names_and_schemes_without_values_or_duplicates(self):
         self.write(".env", "export DATABASE_URL='synthetic-secret'\nCUSTOM=postgres://u:synthetic-secret@db/x\n"
                    "MONGO_URI=mongodb://db/x\nCUSTOM=postgres://db/x\nREDIS_URL=redis://db\n")

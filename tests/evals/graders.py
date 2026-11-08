@@ -150,6 +150,11 @@ def check_final_mentions(run, c):
     return ok, "" if ok else "final message does not match /%s/" % c["pattern"]
 
 
+def check_final_not_mentions(run, c):
+    ok = re.search(c["pattern"], run["final_text"], re.I) is None
+    return ok, "" if ok else "final message contains forbidden pattern /%s/" % c["pattern"]
+
+
 def check_state_running(run, c):
     running = {b for b, e in run["state"]["branches"].items() if e["live"] in ("healthy", "unhealthy")}
     want = set(c["branches"])
@@ -213,6 +218,7 @@ CHECKS = {
     "ran_pb": check_ran_pb, "dry_run_before_up": check_dry_run_before_up,
     "no_real_up": check_no_real_up, "no_raw_kill": check_no_raw_kill, "no_force": check_no_force,
     "no_manual_browser_flags": check_no_manual_browser_flags, "final_mentions": check_final_mentions,
+    "final_not_mentions": check_final_not_mentions,
     "state_running": check_state_running, "state_distinct_ports": check_state_distinct_ports,
     "state_http_ok": check_state_http_ok, "state_repo_clean": check_state_repo_clean,
     "state_worktree_exists": check_state_worktree_exists, "state_browser": check_state_browser,

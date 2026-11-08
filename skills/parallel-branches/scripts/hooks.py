@@ -253,18 +253,17 @@ def run(event, commands, ctx, cwd, log_path, timeout):
     env = environment(event, ctx)
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     count = 0
+    word = "step" if any(isinstance(step, dict) for step in commands) else "command"  # plain lists read as before
     with open(log_path, "w") as log:
         for number, step in enumerate(commands, 1):
             if isinstance(step, str):
                 count += 1
                 ok, detail = run_one(step, ctx, cwd, env, log, timeout)
-                if not ok:
-                    return False, "command %d %s" % (number, detail)
-                continue
-            count += len(step)
-            ok, detail = run_together(step, ctx, cwd, env, log, log_path, timeout)
+            else:
+                count += len(step)
+                ok, detail = run_together(step, ctx, cwd, env, log, log_path, timeout)
             if not ok:
-                return False, "step %d: %s" % (number, detail)
+                return False, "%s %d%s%s" % (word, number, " " if isinstance(step, str) else ": ", detail)
     return True, "%d command%s ran" % (count, "" if count == 1 else "s")
 
 
@@ -284,15 +283,36 @@ def run_one(template, ctx, cwd, env, log, timeout):
     return True, ""
 
 
+def remove_quietly(path):
+    try:
+        os.remove(path)
+    except OSError:  # Windows: a killed child may still hold it for a moment
+        pass
+
+
 def run_together(step, ctx, cwd, env, log, log_path, timeout):
     """Start every named command at once, each writing to its own file, then wait for all of them
-    (sharing one deadline) and append their output to the log in the order they were written."""
+    (sharing one deadline) and append their output to the log in the order of the config."""
     running = []
-    for name, template in step.items():
-        cmd = render(template, ctx)
-        part = "%s.%s.part" % (log_path, name)
-        out = open(part, "w")
-        running.append((name, cmd, part, out, procs.spawn(cmd, cwd, env, out)))
+    try:
+        for index, (name, template) in enumerate(step.items()):
+            cmd = render(template, ctx)
+            part = "%s.%d.part" % (log_path, index)  # by position: names may differ only in case
+            out = open(part, "w")
+            try:
+                proc = procs.spawn(cmd, cwd, env, out)
+            except BaseException:
+                out.close()
+                os.remove(part)
+                raise
+            running.append((name, cmd, part, out, proc))
+    except BaseException:  # one could not start: stop the ones that did, leave no part files
+        for _, _, part, out, proc in running:
+            procs.stop_group(proc.pid)
+            proc.poll()
+            out.close()
+            remove_quietly(part)
+        raise
     deadline = time.time() + timeout
     failures = []
     for name, cmd, part, out, proc in running:
@@ -308,12 +328,9 @@ def run_together(step, ctx, cwd, env, log, log_path, timeout):
         out.close()
     for name, cmd, part, _, _ in running:
         log.write("$ [%s] %s\n" % (name, cmd))
-        with open(part) as fh:
+        with open(part, errors="replace") as fh:  # tools may print bytes the locale cannot decode
             log.write(fh.read())
-        try:
-            os.remove(part)
-        except OSError:  # Windows: a killed child may still hold it for a moment
-            pass
+        remove_quietly(part)
     log.flush()
     if failures:
         return False, "; ".join(failures)

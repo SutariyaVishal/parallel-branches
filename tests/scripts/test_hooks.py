@@ -118,6 +118,44 @@ class ConcurrentStepTests(unittest.TestCase):
         self.assertTrue(os.path.exists(marker))  # the sibling was not cut off
         self.assertNotIn("never", self.log_text())
 
+    def test_names_that_differ_only_in_case_keep_their_own_output(self):
+        ok, detail = self.run_steps([{"DB": self.py("print('upper')"), "db": self.py("print('lower')")}])
+        self.assertTrue(ok, detail)
+        text = self.log_text()
+        self.assertIn("upper", text)
+        self.assertIn("lower", text)
+
+    def test_output_the_locale_cannot_decode_does_not_crash(self):
+        bad = self.py("import sys; sys.stdout.buffer.write(bytes([0x81, 0xff, 0xfe]) + b'tail')")
+        ok, detail = self.run_steps([{"a": bad, "b": "echo fine"}])
+        self.assertTrue(ok, detail)
+        self.assertIn("tail", self.log_text())
+
+    def test_a_command_that_cannot_start_stops_the_others_and_leaves_no_part_files(self):
+        real = hooks.procs.spawn
+        started = []
+
+        def spawn(cmd, cwd, env, log):
+            if "second" in cmd:
+                raise OSError("cannot start")
+            proc = real(cmd, cwd, env, log)
+            started.append(proc)
+            return proc
+
+        with mock.patch.object(hooks.procs, "spawn", side_effect=spawn):
+            with self.assertRaises(OSError):
+                self.run_steps([{"a": SLEEP_CMD + " first", "b": "echo second"}])
+        self.assertEqual(len(started), 1)
+        self.assertIsNotNone(started[0].poll())  # stopped, not left running
+        self.assertEqual([n for n in os.listdir(self.tmp) if n.endswith(".part")], [])
+
+    def test_errors_say_step_once_a_list_has_a_concurrent_step(self):
+        ok, detail = self.run_steps(["echo a", {"x": "echo b"}, FAIL_CMD])
+        self.assertFalse(ok)
+        self.assertRegex(detail, r"^step 3 exited with code 3")
+        ok, detail = self.run_steps(["echo a", FAIL_CMD])
+        self.assertRegex(detail, r"^command 2 exited with code 3")
+
     def test_one_deadline_for_the_whole_step(self):
         started = time.time()
         ok, detail = self.run_steps([{"a": SLEEP_CMD, "b": SLEEP_CMD}], timeout=1)
@@ -310,12 +348,17 @@ class LifecycleTests(HookCase):
 
 class FailureTests(HookCase):
     def test_concurrent_step_in_a_real_up_and_its_dry_run(self):
-        self.config({"post_create": {"one": self.probe("one", "{PORT}"), "two": self.probe("two", "{branch}")}})
+        # One output file per probe: appends from two processes at once can overwrite each other on Windows.
+        outs = {name: os.path.join(self.tmp, name + ".jsonl") for name in ("one", "two")}
+        cmds = {name: " ".join([PY, '"%s"' % PROBE, '"%s"' % outs[name], name, "{PORT}"]) for name in outs}
+        self.config({"post_create": cmds})
         out = self.pb("up", "feat-a", "--cmd", SERVER, "--dry-run").stdout
         self.assertRegex(out, r"feat-a: hook post_create: together: \[one\] .* \[two\] ")
         proc, rows = self.up("feat-a")
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
-        self.assertEqual(sorted(self.labels()), ["one", "two"])
+        for name, path in outs.items():
+            with open(path) as fh:
+                self.assertEqual(json.loads(fh.readline())["label"], name)
         self.assertIn("together: [one]", self.pb("hooks", "feat-a").stdout)
 
     def test_failing_pre_start_stops_the_branch_before_anything_starts(self):

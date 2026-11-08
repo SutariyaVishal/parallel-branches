@@ -507,10 +507,11 @@ def git_ignored(repo, relpath):
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
 
 
-def copy_env_files(main, path, extra_patterns=()):
-    """Copy git-ignored .env files (and .worktreeinclude / config patterns) into a new worktree.
+def copy_plan(main, path, extra_patterns=()):
+    """What `copy_env_files` would copy into `path`: relative names, directories with a trailing separator.
 
-    Never overwrites, and never copies a file git would track. Returns the relative names copied.
+    Patterns are the `.env` files, `.worktreeinclude` lines and `extra_patterns`; a trailing slash is allowed.
+    Only git-ignored files and git-ignored directories match, and anything already in `path` is left alone.
     """
     patterns = [name for name in sorted(os.listdir(main)) if name == ".env" or name.startswith(".env.")]
     for line in read_text(os.path.join(main, ".worktreeinclude")).splitlines():
@@ -518,20 +519,41 @@ def copy_env_files(main, path, extra_patterns=()):
         if line and not line.startswith("#"):
             patterns.append(line)
     patterns.extend(extra_patterns)
-    copied = []
+    planned = []
     for pattern in patterns:
-        for source in sorted(glob.glob(os.path.join(main, pattern), recursive=True)):
-            if not os.path.isfile(source):
-                continue
+        for source in sorted(glob.glob(os.path.join(main, pattern.rstrip("/\\")), recursive=True)):
             rel = os.path.relpath(source, main)
-            dest = os.path.join(path, rel)
-            if rel.startswith("..") or os.path.exists(dest) or rel in copied:
+            is_dir = os.path.isdir(source) and not os.path.islink(source)
+            if rel.startswith("..") or not (is_dir or os.path.isfile(source)):
                 continue
-            if not git_ignored(main, rel):
+            name = rel + os.sep if is_dir else rel
+            if os.path.exists(os.path.join(path, rel)) or name in planned:
                 continue
-            os.makedirs(os.path.dirname(dest) or path, exist_ok=True)
+            if any(name.startswith(done) for done in planned if done.endswith(os.sep)):
+                continue  # inside a directory that is already being copied
+            if git_ignored(main, rel):
+                planned.append(name)
+    return planned
+
+
+def copy_env_files(main, path, extra_patterns=()):
+    """Copy git-ignored files and directories (the `.env` files, `.worktreeinclude`, config patterns) into
+    a new worktree. Directories are cloned copy-on-write where the filesystem allows it.
+
+    Never overwrites, and never copies what git would track. Returns the names copied (see `copy_plan`).
+    """
+    copied = []
+    for name in copy_plan(main, path, extra_patterns):
+        rel = name.rstrip(os.sep)
+        source, dest = os.path.join(main, rel), os.path.join(path, rel)
+        os.makedirs(os.path.dirname(dest) or path, exist_ok=True)
+        if name.endswith(os.sep):
+            if not clone_directory(source, dest):
+                shutil.rmtree(dest, ignore_errors=True)  # partial clone; copy the slow way
+                shutil.copytree(source, dest, symlinks=True)
+        else:
             shutil.copy2(source, dest)
-            copied.append(rel)
+        copied.append(name)
     return copied
 
 

@@ -256,6 +256,33 @@ class EnvCopyTests(TmpCase):
         self.write("local.json", "{}", self.main)
         self.assertEqual(stacks.copy_env_files(self.main, self.wt, ["local.json"]), ["local.json"])
 
+    def test_ignored_directories_are_copied_whole_and_tracked_ones_are_not(self):
+        self.write(".gitignore", ".cache/\n", self.main)
+        self.write(".cache/a/b.bin", "x", self.main)
+        self.write("src/keep.txt", "t", self.main)  # not ignored: tracked content, never copied
+        self.write(".worktreeinclude", ".cache/\nsrc\n.cache/a/b.bin\n", self.main)
+        copied = stacks.copy_env_files(self.main, self.wt)
+        self.assertEqual(copied, [".cache" + os.sep])  # the file inside is not listed again
+        self.assertTrue(os.path.isfile(os.path.join(self.wt, ".cache", "a", "b.bin")))
+        self.assertFalse(os.path.exists(os.path.join(self.wt, "src")))
+
+    def test_plan_changes_nothing_and_matches_what_is_copied(self):
+        self.write(".gitignore", ".env\nout/\n", self.main)
+        self.write(".env", "A=1", self.main)
+        self.write("out/x", "1", self.main)
+        plan = stacks.copy_plan(self.main, self.wt, ["out/"])
+        self.assertEqual(plan, [".env", "out" + os.sep])
+        self.assertEqual(os.listdir(self.wt), [])
+        self.assertEqual(stacks.copy_env_files(self.main, self.wt, ["out/"]), plan)
+
+    def test_existing_directory_in_the_worktree_is_left_alone(self):
+        self.write(".gitignore", "out/\n", self.main)
+        self.write("out/x", "main", self.main)
+        self.write("out/x", "mine", self.wt)
+        self.assertEqual(stacks.copy_env_files(self.main, self.wt, ["out/"]), [])
+        with open(os.path.join(self.wt, "out", "x")) as fh:
+            self.assertEqual(fh.read(), "mine")
+
 
 class RiskScanTests(TmpCase):
     def test_other_local_port_is_flagged_and_own_port_is_not(self):

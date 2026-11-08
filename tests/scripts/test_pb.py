@@ -843,4 +843,3 @@ class BrowserCliTests(PbCase):
 
 if __name__ == "__main__":
     unittest.main()
-    

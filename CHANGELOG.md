@@ -1,5 +1,8 @@
 # Changelog
 
+## Unreleased
+- Tests (Windows): verify `pb down` terminates the whole process tree and frees its ports (#17).
+
 ## 0.12.0
 - Background `post_start`: with `"background_hooks": ["post_start"]` in `.parallel-branches.json`, `up` returns as soon as the servers are healthy and the hook runs in a detached process. The result is recorded when it ends (`pb hooks`: `running in the background`, then `last run ok` or `FAILED`), `down` stops a run that is still going, `pb hook post_start` refuses a second run meanwhile, and the dry run shows `(background)`. Other events cannot be listed.
 

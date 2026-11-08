@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Skip dependency and build/cache directories when scanning copied directories for database env settings, avoiding unrelated warnings and unnecessary traversal. Explicitly copied env files are still checked.
 - Warn once per branch when copied env files contain database settings, including dry runs. Report only file and variable names; do not rewrite values.
 
 ## 0.10.0

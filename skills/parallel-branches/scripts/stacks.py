@@ -558,7 +558,7 @@ def copy_env_files(main, path, extra_patterns=()):
 
 
 def copied_env_paths(path, files):
-    """Expand copied directories without following links or leaving the worktree."""
+    """Expand copied directories, skipping dependencies, caches and symlinks."""
     def safe(rel):
         if os.path.isabs(rel):
             return False
@@ -580,9 +580,11 @@ def copied_env_paths(path, files):
         full = os.path.join(path, rel)
         candidates = [rel]
         if os.path.isdir(full):
+            if any(part in SKIP_DIRS for part in rel.split(os.sep)):
+                continue
             candidates = []
             for root, dirs, names in os.walk(full, followlinks=False):
-                dirs[:] = sorted(d for d in dirs if not os.path.islink(os.path.join(root, d)))
+                dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and not os.path.islink(os.path.join(root, d)))
                 candidates.extend(os.path.relpath(os.path.join(root, name), path) for name in sorted(names))
         for candidate in candidates:
             name = os.path.basename(candidate)

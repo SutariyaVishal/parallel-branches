@@ -254,7 +254,7 @@ def run(event, commands, ctx, cwd, log_path, timeout):
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     count = 0
     word = "step" if any(isinstance(step, dict) for step in commands) else "command"  # plain lists read as before
-    with open(log_path, "w") as log:
+    with open(log_path, "w", encoding="utf-8") as log:  # a command may hold characters the code page lacks
         for number, step in enumerate(commands, 1):
             if isinstance(step, str):
                 count += 1

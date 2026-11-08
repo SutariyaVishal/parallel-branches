@@ -80,11 +80,15 @@ Hook commands run in a shell on your machine, like a start command. So:
 
 `pb hook EVENT BRANCH` runs the stored commands of one event for a tracked branch, with the ports and names the branch has now, and prints `hook EVENT ok` or the failure. Use it to seed a database again or to try a hook without stopping and starting everything. `--dry-run` prints the commands with values filled in and runs nothing (no lock, no state written). `--hook-timeout N` applies to that run only. The exit code is 1 when the hook fails and 2 for an untracked branch. A hook the branch did not store (for example one added to the config after `up`) is not run: start the branch again so the dry run shows it and it is stored. It works on a branch that is stopped, and `post_remove` runs in the main checkout as it does in `clean`.
 
+## Seeing what is stored
+
+`pb hooks [BRANCH]` lists the hooks stored for a tracked branch (every tracked branch without a name): each event, its commands with values filled in, `(user)` on those from the user config, and the last result (`ok`, `FAILED` with the log path, or `never run`). `-v` also prints every value a hook can use (`branch`, `branch_slug`, `db_name`, `worktree`, `repo`, `PORT`, `HMR_PORT`, `URL`, `ports.NAME`, `url.NAME`); they are also the `PB_*` environment variables. `--json` gives the same with the unfilled templates. It takes no lock and writes nothing.
+
 ## Timeouts and logs
 
 Each command gets `hook_timeout` seconds (default 120, at most 3600). `up --hook-timeout N` overrides it, and the value is stored for teardown. A command that runs longer has its whole process group killed.
 
-Output goes to `.git/parallel-branches/logs/<branch_slug>.hook-<event>.log`. `status --json` shows the last result of each event under `hook_runs`. Text `status` does not.
+Output goes to `.git/parallel-branches/logs/<branch_slug>.hook-<event>.log`. `status --json` shows the last result of each event under `hook_runs`. Text `status` does not; use `pb hooks` for that.
 
 ## Limits
 

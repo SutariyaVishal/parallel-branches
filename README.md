@@ -8,7 +8,7 @@ Run several git branches side by side, each with its own dev server on its own p
 
 It is an [agent skill](https://agentskills.io) in the open `SKILL.md` format, built around one dependency-free Python script, `pb.py`. It has only been tried with Claude Code. Other agents that read `SKILL.md` (Codex, Gemini CLI, Cursor and others) should be able to use it, but that is untested. You can also use the script on its own.
 
-> **Status: beta (v0.8.0).** Tested in CI on Linux, macOS and Windows with Python 3.9 and newer. Port handling was measured against real Vite, Flask and plain Node servers; the other stacks follow each tool's documentation. See [Limits](#limits).
+> **Status: beta (v0.9.0).** Tested in CI on Linux, macOS and Windows with Python 3.9 and newer. Port handling was measured against real Vite, Flask and plain Node servers; the other stacks follow each tool's documentation. See [Limits](#limits).
 
 ## The problem
 
@@ -104,6 +104,7 @@ When detection finds nothing, or guesses wrong, say what to run: `pb up feature-
 | `pb restart BRANCH [SERVICE]` | Restart one service or all of them, on the same ports |
 | `pb down BRANCH...` or `--all` | Stop what `pb` started, and close its dev browsers. `--no-hooks` skips `pre_stop` |
 | `pb clean [--yes] [--force]` | Remove worktrees `pb` created. A dry run unless `--yes`. `--no-hooks` skips `pre_remove` and `post_remove` |
+| `pb hooks [BRANCH] [-v]` | Show the hooks stored for a branch with values filled in, and the last result of each. `-v` adds every value a hook can use. |
 | `pb hook EVENT BRANCH [--dry-run]` | Run one stored hook of a tracked branch by hand, or show it |
 | `pb browser BRANCH` | Open a dev-mode browser (web security off, throwaway profile) |
 | `pb init [--write]` | Suggest a `services` config for a monorepo |

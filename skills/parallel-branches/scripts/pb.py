@@ -976,6 +976,52 @@ def cmd_hook(args):
         return 0 if results[0]["ok"] else 1
 
 
+def cmd_hooks(args):
+    """Show what hooks a tracked branch has stored, with values filled in, and the values themselves."""
+    main, state_dir = repo_info(args.repo)
+    branches = load_state(state_dir)["branches"]  # read only: no lock, nothing written
+    if args.branch:
+        if args.branch not in branches:
+            raise PbError("%s is not tracked; start it with `up` first" % args.branch)
+        names = [args.branch]
+    else:
+        names = sorted(branches)
+    out = []
+    for name in names:
+        entry = branches[name]
+        ctx = hooks.context_from_entry(entry, main, slugify(name))
+        variables = {k: v for k, v in ctx.items() if k != "ports"}
+        for svc, port in ctx["ports"].items():
+            variables["ports." + svc] = port
+            variables["url." + svc] = "http://localhost:%d" % port
+        stored = entry.get("hooks") or {}
+        rows = []
+        for event in hooks.EVENTS:
+            if event in stored:
+                rows.append({"event": event, "templates": stored[event],
+                             "commands": [hooks.render(t, ctx) for t in stored[event]],
+                             "sources": (entry.get("hook_sources") or {}).get(event),
+                             "last_run": (entry.get("hook_runs") or {}).get(event)})
+        out.append({"branch": name, "variables": variables, "hooks": rows})
+    if args.json:
+        print(json.dumps(out, indent=2))
+        return 0
+    for item in out:
+        name = item["branch"]
+        if not item["hooks"]:
+            print("%s: no hooks stored (hooks are read from the config when the branch starts)" % name)
+        for row in item["hooks"]:
+            run = row["last_run"]
+            last = "never run" if not run else "last run %s (%s)" % ("ok" if run["ok"] else "FAILED", run["log"])
+            print("%s: hook %s, %s" % (name, row["event"], last))
+            for n, text in enumerate(row["commands"]):
+                print("    %s%s" % (text, hooks.label(row["sources"], n)))
+        if args.verbose:
+            print("%s: values (the same as PB_* environment variables)" % name)
+            table([(k, str(v)) for k, v in item["variables"].items()])
+    return 0
+
+
 # --------------------------------------------------------------------- output
 
 def table(rows):
@@ -1113,6 +1159,12 @@ def build_parser():
     hk.add_argument("--dry-run", action="store_true", help="print the command with values filled in, run nothing")
     hk.add_argument("--hook-timeout", type=int, help="seconds allowed per command (default: what the branch stored)")
     hk.set_defaults(func=cmd_hook)
+
+    hs = sub.add_parser("hooks", help="show the hooks stored for a branch (or all), with values filled in")
+    hs.add_argument("branch", nargs="?", help="default: every tracked branch")
+    hs.add_argument("-v", "--verbose", action="store_true", help="also print every value a hook can use")
+    hs.add_argument("--json", action="store_true")
+    hs.set_defaults(func=cmd_hooks)
     return parser
 
 

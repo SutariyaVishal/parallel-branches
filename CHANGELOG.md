@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.12.0
+- Background `post_start`: with `"background_hooks": ["post_start"]` in `.parallel-branches.json`, `up` returns as soon as the servers are healthy and the hook runs in a detached process. The result is recorded when it ends (`pb hooks`: `running in the background`, then `last run ok` or `FAILED`), `down` stops a run that is still going, `pb hook post_start` refuses a second run meanwhile, and the dry run shows `(background)`. Other events cannot be listed.
+
 ## 0.11.0
 - Warning when copied env files point every branch at the same database (#9, thanks @sunxiuguo). `up` and `up --dry-run` name the file and variable, never the value. It looks for `DATABASE_URL`, `DB_URL`, `MONGO_URI`, `MONGODB_URI`, `REDIS_URL`, database-name keys (`DB_NAME`, `DB_DATABASE`, `PGDATABASE`, `POSTGRES_DB`, `MYSQL_DATABASE`) and database URL schemes, including SQLAlchemy `+driver` and `jdbc:` forms. It reads `.env`, `.env.*`, `*.env` and `.envrc` files, including those inside copied directories, without following symlinks. A real `up` checks after `post_create`, so a hook that removes the setting clears the warning. `references/stacks.md` has a "Shared state" section with the hooks workaround.
 - Copied directories that are dependency or build/cache folders (`node_modules`, `.venv`, `dist` and the rest of the usual list) are not walked for that warning, so packages' own env files cause no false warnings (#11). An env file listed by itself is still checked.

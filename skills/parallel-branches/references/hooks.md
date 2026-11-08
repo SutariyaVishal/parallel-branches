@@ -84,6 +84,16 @@ Hook commands run in a shell on your machine, like a start command. So:
 
 `pb hooks [BRANCH]` lists the hooks stored for a tracked branch (every tracked branch without a name): each event, its commands with values filled in, `(user)` on those from the user config, and the last result (`ok`, `FAILED` with the log path, or `never run`). `-v` also prints every value a hook can use (`branch`, `branch_slug`, `db_name`, `worktree`, `repo`, `PORT`, `HMR_PORT`, `URL`, `ports.NAME`, `url.NAME`); they are also the `PB_*` environment variables. `--json` gives the same with the unfilled templates. It takes no lock and writes nothing.
 
+## Running `post_start` in the background
+
+A slow `post_start` (seeding, warming a cache) holds `up` until it finishes. List it in `background_hooks` and `up` returns as soon as the servers are healthy:
+
+```json
+{"hooks": {"post_start": "npm run seed"}, "background_hooks": ["post_start"]}
+```
+
+The commands run in a detached process with the same values, order, timeout and log as before. `up` prints `hook post_start running in the background (pid N, log ...)`, the dry run shows `hook post_start (background): ...`, and the result is recorded when it ends: `pb hooks` shows `running in the background`, then `last run ok` or `FAILED`. `down` stops a run that is still going before `pre_stop` (`stopped by down`), and `pb hook post_start BRANCH` refuses to start a second run while one is going. Only `post_start` can be listed; it is read from the repository config only, not the user config, and stored with the branch at `up` like the hooks themselves.
+
 ## Timeouts and logs
 
 Each command gets `hook_timeout` seconds (default 120, at most 3600). `up --hook-timeout N` overrides it, and the value is stored for teardown. A command that runs longer has its whole process group killed.
@@ -92,8 +102,8 @@ Output goes to `.git/parallel-branches/logs/<branch_slug>.hook-<event>.log`. `st
 
 ## Limits
 
-- Commands in one list run one after another. There is no concurrent form.
-- A hook that starts a background process and leaves it running is not tracked or stopped by `down`. Use a `services` entry for processes that should live as long as the branch.
+- Commands in one list run one after another. There is no concurrent form; `background_hooks` only moves the whole `post_start` list off `up`'s path.
+- A hook command that starts its own background process and leaves it running is not tracked or stopped by `down` (a `background_hooks` run is).  Use a `services` entry for processes that should live as long as the branch.
 - Removing a worktree with `git worktree remove` instead of `pb clean` runs no hooks, so `pre_remove` and `post_remove` never fire.
 - Hooks come from the repository config and the one per-user file. There is no other level, and no per-directory or per-organisation config.
 - A config committed on the branch can only be read once its worktree exists. A mistake in `hooks` there is reported after the worktree was created. `--dry-run` reads the main checkout's config and catches it first.

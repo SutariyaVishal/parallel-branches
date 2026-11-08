@@ -422,6 +422,83 @@ def run_hook(entry, event, main, state_dir, results):
     return result
 
 
+JOB_COMMAND = "_hook-job"  # internal: `pb.py _hook-job FILE` runs one background hook
+
+
+def start_background_hook(entry, event, main, state_dir):
+    """Run a stored hook in a detached `pb.py _hook-job` process, which records its own result.
+
+    Returns the "running" record it puts on the entry (pid, start token, log).
+    """
+    slug = slugify(entry["branch"])
+    logs = os.path.join(state_dir, "logs")
+    job = os.path.join(logs, "%s.hook-%s.job.json" % (slug, event))
+    with open(job, "w") as fh:
+        json.dump({"entry": entry, "event": event, "main": main, "state_dir": state_dir}, fh)
+    proc = procs.spawn_program([sys.executable, os.path.abspath(__file__), JOB_COMMAND, job])
+    run = {"ok": None, "running": True, "pid": proc.pid, "token": process_token(proc.pid),
+           "log": os.path.join(logs, "%s.hook-%s.log" % (slug, event)), "at": int(time.time())}
+    entry.setdefault("hook_runs", {})[event] = run
+    return run
+
+
+def run_hook_job(job_path):
+    """The detached side of `start_background_hook`: run the hook, then record the result on the
+    branch, unless the branch was started again since (its start time no longer matches)."""
+    with open(job_path) as fh:
+        job = json.load(fh)
+    entry, event, state_dir = job["entry"], job["event"], job["state_dir"]
+    run_hook(entry, event, job["main"], state_dir, [])
+    record = dict(entry["hook_runs"][event], background=True)
+    deadline = time.time() + 600
+    while True:
+        try:
+            with locked(state_dir):  # `up` may still hold it while it starts other branches
+                state = load_state(state_dir)
+                live = state["branches"].get(entry["branch"])
+                if live and live.get("started_at") == entry.get("started_at"):
+                    live.setdefault("hook_runs", {})[event] = record
+                    save_state(state_dir, state)
+            break
+        except OSError:  # Windows: the lock wait timed out
+            if time.time() > deadline:
+                raise
+            time.sleep(1)
+    with contextlib.suppress(OSError):
+        os.remove(job_path)
+    return 0 if record["ok"] else 1
+
+
+def background_alive(run):
+    """True while a background hook run is still the process we started."""
+    if not run or not run.get("running") or not run.get("pid") or not group_alive(run["pid"]):
+        return False
+    return process_token(run["pid"]) == run.get("token")
+
+
+def stop_background_hook(entry, event):
+    """Stop a background run of `event` that is still going. True if there was one."""
+    run = (entry.get("hook_runs") or {}).get(event)
+    if not background_alive(run):
+        return False
+    stop_group(run["pid"])
+    run.update(running=False, ok=False, stopped=True, pid=None, token=None, at=int(time.time()))
+    return True
+
+
+def describe_run(run):
+    """One phrase for the last run of a hook, as `pb hooks` prints it."""
+    if not run:
+        return "never run"
+    if run.get("running"):
+        if background_alive(run):
+            return "running in the background (pid %s, %s)" % (run["pid"], run["log"])
+        return "background run ended without a result (%s)" % run["log"]
+    if run.get("stopped"):
+        return "stopped by down (%s)" % run["log"]
+    return "last run %s (%s)" % ("ok" if run["ok"] else "FAILED", run["log"])
+
+
 def up_one(args, state, state_dir, main, base_dir, branch):
     """Start one branch: its worktree and every service. Returns (result_row, failed)."""
     existing = state["branches"].get(branch)
@@ -459,6 +536,10 @@ def up_one(args, state, state_dir, main, base_dir, branch):
         user_cmds, user_timeout = hooks.parse(args.user_cfg, names)
     except ValueError as exc:
         raise PbError("bad hooks in %s: %s" % (args.user_cfg_path, exc))
+    try:
+        background = hooks.parse_background(repo_cfg)
+    except ValueError as exc:
+        raise PbError("bad hooks in %s: %s" % (stacks.CONFIG_NAME, exc))
     hook_cmds, hook_sources = hooks.merge(user_cmds, project_cmds)  # user commands first
     hook_timeout = args.hook_timeout or (project_timeout if "hook_timeout" in repo_cfg else user_timeout)
     if args.no_hooks:
@@ -494,6 +575,9 @@ def up_one(args, state, state_dir, main, base_dir, branch):
             where = known or os.path.join(base_dir, slugify(branch))
             row["hook_preview"] = hooks.preview(hook_cmds, hooks.context(branch, slugify(branch), where, main,
                                                                   ports, primary_name), hook_sources)
+            for item in row["hook_preview"]:
+                if item["event"] in background:
+                    item["background"] = True
         return row, False
 
     log_dir = os.path.join(state_dir, "logs")
@@ -507,6 +591,8 @@ def up_one(args, state, state_dir, main, base_dir, branch):
         entry["hooks"], entry["hook_timeout"] = hook_cmds, hook_timeout
         if hook_sources:
             entry["hook_sources"] = hook_sources
+        if any(event in hook_cmds for event in background):
+            entry["hook_background"] = [event for event in background if event in hook_cmds]
     recs = {}
     for svc, svc_dir, st in prepared:
         name = svc["name"]
@@ -604,9 +690,13 @@ def up_one(args, state, state_dir, main, base_dir, branch):
     for rec in all_records(entry):
         rec["healthy"] = True
     note = primary_detail
-    post = run_hook(entry, "post_start", main, state_dir, hook_results)
-    if post and not post["ok"]:  # the servers are up and stay up; only report it
-        note += "\nWARNING: hook post_start failed: %s (log %s)" % (post["detail"], post["log"])
+    if "post_start" in (entry.get("hook_background") or []):
+        bg = start_background_hook(entry, "post_start", main, state_dir)
+        note += "\nhook post_start running in the background (pid %d, log %s)" % (bg["pid"], bg["log"])
+    else:
+        post = run_hook(entry, "post_start", main, state_dir, hook_results)
+        if post and not post["ok"]:  # the servers are up and stay up; only report it
+            note += "\nWARNING: hook post_start failed: %s (log %s)" % (post["detail"], post["log"])
     save()
     return dict(entry, note=note, hook_results=hook_results), False
 
@@ -874,6 +964,8 @@ def cmd_down(args):
             if not entry:
                 print("%s: not registered" % branch)
                 continue
+            if stop_background_hook(entry, "post_start"):
+                print("%s: stopped background hook post_start" % branch)
             records = [(branch + (":" + entry["service"] if entry.get("service") else ""), entry)]
             records += [("%s:%s" % (branch, rec["service"]), rec) for rec in reversed(entry.get("extras") or [])]
             if not args.no_hooks and any(entry_owns_process(rec) for _, rec in records):
@@ -964,6 +1056,10 @@ def cmd_hook(args):
         if not entry:
             raise PbError("%s is not tracked; start it with `up` first" % args.branch)
         commands = (entry.get("hooks") or {}).get(args.event)
+        running = (entry.get("hook_runs") or {}).get(args.event)
+        if not args.dry_run and background_alive(running):
+            raise PbError("%s: hook %s is still running in the background (pid %s); wait for it or run `down`"
+                          % (args.branch, args.event, running["pid"]))
         if not commands:
             print("%s: no %s hook stored (hooks are read from the config when the branch starts)"
                   % (args.branch, args.event))
@@ -1019,9 +1115,8 @@ def cmd_hooks(args):
         if not item["hooks"]:
             print("%s: no hooks stored (hooks are read from the config when the branch starts)" % name)
         for row in item["hooks"]:
-            run = row["last_run"]
-            last = "never run" if not run else "last run %s (%s)" % ("ok" if run["ok"] else "FAILED", run["log"])
-            print("%s: hook %s, %s" % (name, row["event"], last))
+            bg = " (background)" if row["event"] in (branches[name].get("hook_background") or []) else ""
+            print("%s: hook %s%s, %s" % (name, row["event"], bg, describe_run(row["last_run"])))
             for n, text in enumerate(row["commands"]):
                 print("    %s%s" % (text, hooks.label(row["sources"], n)))
         if args.verbose:
@@ -1051,7 +1146,8 @@ def print_results(results, as_json):
         name = r["branch"]
         for item in r.get("hook_preview") or []:  # dry run: what would run, with values filled in
             for n, text in enumerate(item["commands"]):
-                print("%s: hook %s%s: %s" % (name, item["event"], hooks.label(item.get("sources"), n), text))
+                print("%s: hook %s%s%s: %s" % (name, item["event"], " (background)" if item.get("background") else "",
+                                                hooks.label(item.get("sources"), n), text))
         for item in r.get("hook_results") or []:
             report_hook(name, item)
         if r.get("stack"):
@@ -1184,6 +1280,9 @@ def build_parser():
 
 
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if len(argv) == 2 and argv[0] == JOB_COMMAND:
+        return run_hook_job(argv[1])
     args = build_parser().parse_args(argv)
     args.repo = os.path.abspath(args.repo)
     try:

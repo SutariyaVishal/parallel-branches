@@ -90,6 +90,7 @@ Optional, at the repository root. The worktree's copy wins over the main checkou
 | `copy` | Extra glob patterns of git-ignored files or directories to copy into new worktrees (a trailing `/` is fine). |
 | `hooks` | Commands run at fixed points of a branch's life. See `hooks.md`. |
 | `hook_timeout` | Seconds allowed per hook command. Default 120. |
+| `background_hooks` | `["post_start"]` runs that hook in the background so `up` does not wait for it. See `references/hooks.md`. |
 | `services` | Several processes for one branch. See below. When present, the top-level `cmd`, `install`, `env` and `health_path` are not used for starting. |
 
 These strings run in a shell. Read a repository's config before running it, the same way you would read its `package.json` scripts.

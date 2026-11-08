@@ -35,6 +35,7 @@ import stacks
 EVENTS = ("post_create", "pre_start", "post_start", "pre_stop", "pre_remove", "post_remove")
 BLOCKING = ("post_create", "pre_start", "pre_remove")
 DEFAULT_TIMEOUT = 120
+BACKGROUND_EVENTS = ("post_start",)  # events that may run detached (`background_hooks`)
 MAX_TIMEOUT = 3600
 # `$` before the brace means the shell's own ${VAR}, which is not ours to touch.
 TOKEN_RE = re.compile(r"(?<!\$)\{(branch_slug|branch|db_name|worktree|repo|PORT|HMR_PORT|URL"
@@ -136,6 +137,18 @@ def parse(cfg, service_names=()):
                     raise ValueError("hook %s refers to unknown service %r" % (event, name))
         commands[event] = list(items)
     return commands, timeout
+
+
+def parse_background(cfg):
+    """The events listed in `background_hooks`, whose commands run detached. Raises ValueError."""
+    raw = cfg.get("background_hooks", [])
+    if not isinstance(raw, list) or not all(isinstance(x, str) for x in raw):
+        raise ValueError("background_hooks must be a list of event names")
+    for event in raw:
+        if event not in BACKGROUND_EVENTS:
+            raise ValueError("background_hooks: only %s can run in the background, not %r"
+                             % (", ".join(BACKGROUND_EVENTS), event))
+    return list(dict.fromkeys(raw))
 
 
 def db_name(branch):

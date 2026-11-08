@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -16,6 +17,13 @@ PROBE = os.path.join(ROOT, "tests", "helpers", "hookprobe.py")
 
 
 class ParseTests(unittest.TestCase):
+    def test_background_hooks_accepts_post_start_only(self):
+        self.assertEqual(hooks.parse_background({}), [])
+        self.assertEqual(hooks.parse_background({"background_hooks": ["post_start", "post_start"]}), ["post_start"])
+        for bad in ("post_start", ["pre_start"], ["post_stop"], [3]):
+            with self.assertRaises(ValueError):
+                hooks.parse_background({"background_hooks": bad})
+
     def test_accepts_strings_and_lists(self):
         cmds, timeout = hooks.parse({"hooks": {"pre_start": "a", "post_start": ["b", "c"]}})
         self.assertEqual(cmds, {"pre_start": ["a"], "post_start": ["b", "c"]})
@@ -381,6 +389,69 @@ class HookCommandTests(HookCase):
         self.assertEqual(proc.returncode, 0)
         self.assertIn("no pre_stop hook stored", proc.stdout)
         self.assertEqual(self.pb("hook", "post_merge", "feat-a").returncode, 2)  # argparse rejects it
+
+
+class BackgroundHookTests(HookCase):
+    def wait_for(self, predicate, timeout=20):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if predicate():
+                return True
+            time.sleep(0.2)
+        return False
+
+    def post_start_run(self):
+        return json.loads(self.pb("status", "--json").stdout)[0].get("hook_runs", {}).get("post_start")
+
+    def test_up_returns_before_the_hook_finishes_and_the_result_is_recorded(self):
+        slow = PY + " -c \"import time; time.sleep(3)\" && " + self.probe("seeded", "{URL}")
+        self.config({"post_start": slow}, background_hooks=["post_start"])
+        started = time.time()
+        proc, rows = self.up("feat-a")
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertLess(time.time() - started, 15)
+        self.assertEqual(self.labels(), [])  # not finished when `up` returned
+        self.assertTrue(rows[0]["hook_runs"]["post_start"]["running"])
+        self.assertIn("running in the background", self.pb("hooks", "feat-a").stdout)
+        self.assertTrue(self.wait_for(lambda: (self.post_start_run() or {}).get("ok") is True))
+        self.assertEqual(self.labels(), ["seeded"])
+        self.assertEqual(self.records()[0]["fetched"]["http://localhost:%d" % rows[0]["port"]], 200)
+        self.assertIn("hook post_start (background), last run ok", self.pb("hooks", "feat-a").stdout)
+
+    def test_a_failing_background_hook_is_recorded_as_failed(self):
+        self.config({"post_start": FAIL_CMD}, background_hooks=["post_start"])
+        proc, _ = self.up("feat-a")
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertTrue(self.wait_for(lambda: (self.post_start_run() or {}).get("ok") is False))
+        self.assertIn("last run FAILED", self.pb("hooks", "feat-a").stdout)
+
+    def test_down_stops_a_hook_that_is_still_running(self):
+        self.config({"post_start": SLEEP_CMD}, background_hooks=["post_start"])
+        _, rows = self.up("feat-a")
+        pid = rows[0]["hook_runs"]["post_start"]["pid"]
+        proc = self.pb("hook", "post_start", "feat-a")  # not twice at once
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("still running in the background", proc.stderr)
+        out = self.pb("down", "feat-a").stdout
+        self.assertIn("feat-a: stopped background hook post_start", out)
+        self.assertFalse(pb.group_alive(pid))
+        self.assertTrue(self.post_start_run()["stopped"])
+        self.assertIn("stopped by down", self.pb("hooks", "feat-a").stdout)
+
+    def test_dry_run_labels_it_and_other_events_are_refused(self):
+        self.config({"post_start": self.probe("x")}, background_hooks=["post_start"])
+        out = self.pb("up", "feat-a", "--cmd", SERVER, "--dry-run").stdout
+        self.assertRegex(out, r"feat-a: hook post_start \(background\): ")
+        self.config({"pre_start": self.probe("x")}, background_hooks=["pre_start"])
+        proc = self.pb("up", "feat-a", "--cmd", SERVER, "--dry-run")
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("only post_start can run in the background", proc.stderr)
+
+    def test_without_the_key_post_start_still_blocks(self):
+        self.config({"post_start": self.probe("inline")})
+        _, rows = self.up("feat-a")
+        self.assertEqual(self.labels(), ["inline"])
+        self.assertTrue(rows[0]["hook_runs"]["post_start"]["ok"])
 
 
 class HooksShowTests(HookCase):

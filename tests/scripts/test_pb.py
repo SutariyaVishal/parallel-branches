@@ -1,5 +1,7 @@
 """Tests for skills/parallel-branches/scripts/pb.py. Run: python3 -m unittest discover tests/scripts"""
 
+import contextlib
+import io
 import importlib.util
 import json
 import os
@@ -9,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 import urllib.request
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -414,6 +417,105 @@ class DetectionCliTests(PbCase):
         self.assertEqual(rows[0]["copied_env"], [".env"])
         with open(os.path.join(rows[0]["path"], ".env")) as fh:
             self.assertEqual(fh.read(), "SECRET=1")
+
+    def test_database_dry_run_reuses_one_copy_plan(self):
+        self.add_files({".gitignore": ".env\n"})
+        with open(os.path.join(self.repo, ".env"), "w") as fh:
+            fh.write("DB_NAME=synthetic\n")
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {"PB_USER_CONFIG": self.user_cfg}), contextlib.redirect_stdout(out):
+            with mock.patch.object(pb.stacks, "copy_plan", wraps=pb.stacks.copy_plan) as plan:
+                code = pb.main(["--repo", self.repo, "up", "feat-a", "--cmd", SERVER, "--dry-run", "--json"])
+        self.assertEqual(code, 0)
+        self.assertEqual(plan.call_count, 1)
+        row = json.loads(out.getvalue())[0]
+        self.assertEqual(row["would_copy"], [".env"])
+        self.assertEqual(row["shared_database"], [{"file": ".env", "variable": "DB_NAME"}])
+
+    def test_post_create_changes_are_scanned_but_renames_do_not_prove_isolation(self):
+        for replacement, warned in (("PORT=3000", False), ("DATABASE_URL=postgres://new-db/x", True)):
+            with self.subTest(replacement=replacement):
+                hook = PY + " -c \"open('.env','w').write('" + replacement + "')\""
+                self.add_files({".gitignore": ".env\n", ".parallel-branches.json": json.dumps({
+                    "hooks": {"post_create": hook}})})
+                with open(os.path.join(self.repo, ".env"), "w") as fh:
+                    fh.write("DATABASE_URL=postgres://original-db/x")
+                branch = "removed" if not warned else "renamed"
+                self.git("branch", branch)
+                _, dry = self.up(branch, extra=("--dry-run",))
+                self.assertTrue(dry[0]["shared_database"])
+                proc, rows = self.up(branch)
+                self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+                self.assertEqual(bool(rows[0]["shared_database"]), warned)
+                self.pb("down", branch)
+                _, restarted = self.up(branch)
+                self.assertEqual(bool(restarted[0]["shared_database"]), warned)
+
+    def test_copied_directory_and_envrc_warn_in_dry_run_and_real_up(self):
+        self.add_files({".gitignore": "config/\n.envrc\n", ".worktreeinclude": ".envrc\nconfig/\n"})
+        os.makedirs(os.path.join(self.repo, "config"))
+        with open(os.path.join(self.repo, "config", ".env"), "w") as fh:
+            fh.write("DB_NAME=synthetic")
+        with open(os.path.join(self.repo, ".envrc"), "w") as fh:
+            fh.write("export CUSTOM=postgresql+psycopg://db/x")
+        for extra in (("--dry-run",), ()):
+            proc, rows = self.up("feat-a", extra=extra)
+            self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+            self.assertEqual(rows[0]["shared_database"], [
+                {"file": ".envrc", "variable": "CUSTOM"},
+                {"file": os.path.join("config", ".env"), "variable": "DB_NAME"}])
+
+    def test_shared_database_warning_dry_run_and_real_up(self):
+        self.add_files({".gitignore": ".env\n.env.local\n",
+                        ".env.example": "DATABASE_URL=not-copied\n"})
+        content = "DATABASE_URL=postgres://u:synthetic-password@db/x\nCACHE=redis://db\n"
+        with open(os.path.join(self.repo, ".env"), "w") as fh:
+            fh.write(content)
+        expected = [{"file": ".env", "variable": key} for key in ("DATABASE_URL", "CACHE")]
+        proc, dry = self.up("feat-a", "feat-b", extra=("--dry-run",))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual([row["shared_database"] for row in dry], [expected, expected])
+        self.assertNotIn("synthetic-password", proc.stdout)
+        self.assertFalse(os.path.exists(self.wt))
+        text = self.pb("up", "feat-a", "feat-b", "--cmd", SERVER, "--dry-run").stdout
+        self.assertEqual(text.count("WARNING copied database"), 2)
+        self.assertIn(".env (DATABASE_URL)", text)
+        self.assertNotIn("synthetic-password", text)
+        proc, actual = self.up("feat-a", "feat-b")
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertEqual([row["shared_database"] for row in actual], [expected, expected])
+        self.assertNotIn("synthetic-password", proc.stdout)
+        for row in actual:
+            self.assertTrue(http_ok(row["port"]))
+            with open(os.path.join(row["path"], ".env")) as fh:
+                self.assertEqual(fh.read(), content)
+        with open(self.state_path()) as fh:
+            self.assertNotIn("synthetic-password", fh.read())
+
+    def test_shared_database_restart_rescans_copied_files(self):
+        self.add_files({".gitignore": ".env\n"})
+        with open(os.path.join(self.repo, ".env"), "w") as fh:
+            fh.write("DATABASE_URL=postgres://db/x\n")
+        _, first = self.up("feat-a")
+        self.pb("down", "feat-a")
+        _, dry = self.up("feat-a", extra=("--dry-run",))
+        _, restarted = self.up("feat-a")
+        self.assertEqual(restarted[0]["shared_database"], first[0]["shared_database"])
+        self.assertEqual(dry[0]["shared_database"], first[0]["shared_database"])
+        self.pb("down", "feat-a")
+        with open(os.path.join(first[0]["path"], ".env"), "w") as fh:
+            fh.write("PORT=3000\n")
+        _, rescanned = self.up("feat-a")
+        self.assertEqual(rescanned[0]["shared_database"], [])
+
+    def test_no_shared_database_warning_for_ordinary_copied_env(self):
+        self.add_files({".gitignore": ".env\n"})
+        with open(os.path.join(self.repo, ".env"), "w") as fh:
+            fh.write("PORT=3000\n")
+        for extra in (("--dry-run",), ()):
+            proc, rows = self.up("feat-a", extra=extra)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(rows[0]["shared_database"], [])
 
     def test_hardcoded_urls_raise_cors_risk_and_auth_warning(self):
         self.add_files({".env.example": "API=http://localhost:9999\nREDIRECT_URI=http://localhost:4200/cb\n"})

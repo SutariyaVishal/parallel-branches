@@ -284,6 +284,60 @@ class EnvCopyTests(TmpCase):
             self.assertEqual(fh.read(), "mine")
 
 
+class SharedDatabaseTests(TmpCase):
+    def test_driver_jdbc_and_mariadb_schemes(self):
+        for url in ("postgresql+psycopg://db/x", "postgresql+asyncpg://db/x", "mysql+pymysql://db/x",
+                    "jdbc:postgresql://db/x", "jdbc:mysql://db/x", "mariadb://db/x"):
+            with self.subTest(url=url):
+                self.write(".env", "CUSTOM=" + url)
+                self.assertEqual(stacks.shared_database_variables(self.dir, [".env"]),
+                                 [{"file": ".env", "variable": "CUSTOM"}])
+
+    def test_database_name_keys_but_not_host_only_settings(self):
+        keys = ("DB_NAME", "DB_DATABASE", "PGDATABASE", "POSTGRES_DB", "MYSQL_DATABASE")
+        self.write(".envrc", "export DB_HOST=localhost\n" + "\n".join(key + "=synthetic" for key in keys))
+        self.assertEqual([w["variable"] for w in stacks.shared_database_variables(self.dir, [".envrc"])], list(keys))
+
+    def test_copied_directories_expand_env_files_and_deduplicate(self):
+        self.write("config/nested/.env", "DB_NAME=synthetic")
+        self.write("config/.envrc", "export CUSTOM=jdbc:mysql://db/x")
+        self.write("config/not-env.txt", "DATABASE_URL=postgres://db/x")
+        files = ["config" + os.sep, os.path.join("config", "nested", ".env")]
+        self.assertEqual(stacks.shared_database_variables(self.dir, files), [
+            {"file": os.path.join("config", ".envrc"), "variable": "CUSTOM"},
+            {"file": os.path.join("config", "nested", ".env"), "variable": "DB_NAME"}])
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "symlinks unavailable")
+    def test_scan_does_not_follow_file_directory_or_ancestor_symlinks(self):
+        self.write("elsewhere/.env", "DATABASE_URL=postgres://synthetic/x")
+        self.write("config/.env", "PORT=3000")
+        try:
+            os.symlink(os.path.join(self.dir, "elsewhere"), os.path.join(self.dir, "config", "link"),
+                       target_is_directory=True)
+            os.symlink(os.path.join(self.dir, "elsewhere", ".env"), os.path.join(self.dir, "config", ".env.link"))
+        except OSError as exc:
+            self.skipTest(str(exc))
+        self.assertEqual(stacks.shared_database_variables(self.dir, ["config/", "config/link/.env",
+                                                                    "config/.env.link", "../elsewhere/.env"]), [])
+
+    def test_names_and_schemes_without_values_or_duplicates(self):
+        self.write(".env", "export DATABASE_URL='synthetic-secret'\nCUSTOM=postgres://u:synthetic-secret@db/x\n"
+                   "MONGO_URI=mongodb://db/x\nCUSTOM=postgres://db/x\nREDIS_URL=redis://db\n")
+        self.assertEqual(stacks.shared_database_variables(self.dir, [".env", ".env"]), [
+            {"file": ".env", "variable": key} for key in ("DATABASE_URL", "CUSTOM", "MONGO_URI", "REDIS_URL")])
+
+    def test_ordinary_comments_non_env_and_missing_files_are_ignored(self):
+        self.write(".env", "# DATABASE_URL=secret\nTEXT=contains postgres://example\nPORT=3000\n"
+                   "DATABASE_URL=\nDB_URL= # comment\nREDIS_URL=\"\"\nMONGO_URI=''\n")
+        self.write("local.json", "DATABASE_URL=secret")
+        self.assertEqual(stacks.shared_database_variables(self.dir, [".env", "local.json", ".env.missing"]), [])
+
+    def test_nested_env_and_other_schemes(self):
+        self.write("config/local.env", "A=\"mysql://db/x\"\nB=mongodb+srv://db/x\nC=rediss://db\nD=postgresql://db\n")
+        self.assertEqual([w["variable"] for w in stacks.shared_database_variables(self.dir, ["config/local.env"])],
+                         ["A", "B", "C", "D"])
+
+
 class RiskScanTests(TmpCase):
     def test_other_local_port_is_flagged_and_own_port_is_not(self):
         self.write(".env", "API=http://localhost:9999/v1\nSELF=http://localhost:4500\n")

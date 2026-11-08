@@ -483,11 +483,13 @@ def up_one(args, state, state_dir, main, base_dir, branch):
                "install": main_row["install"], "cors_risk": risks["cors_risk"], "warnings": risks["findings"],
                "note": "dry run, nothing started"
                        + ("" if known else " (stack and warnings read from the main checkout)")}
+        copied = (stacks.copy_plan(main, os.path.join(base_dir, slugify(branch)), repo_cfg.get("copy") or [])
+                  if known is None else (existing or {}).get("copied_env", []))
+        row["shared_database"] = stacks.shared_database_variables(path, copied)
         if multi:
             row["services"] = rows
         if known is None:  # a new worktree gets the ignored files; an existing one is left as it is
-            row["would_copy"] = stacks.copy_plan(main, os.path.join(base_dir, slugify(branch)),
-                                                 repo_cfg.get("copy") or [])
+            row["would_copy"] = copied
         if hook_cmds:
             where = known or os.path.join(base_dir, slugify(branch))
             row["hook_preview"] = hooks.preview(hook_cmds, hooks.context(branch, slugify(branch), where, main,
@@ -525,7 +527,9 @@ def up_one(args, state, state_dir, main, base_dir, branch):
     save = lambda: save_state(state_dir, state)  # noqa: E731
 
     if created and path != main:
-        entry["copied_env"] = stacks.copy_env_files(main, path, repo_cfg.get("copy") or [])
+        previous = (existing or {}).get("copied_env", []) if existing and existing.get("path") == path else []
+        copied = stacks.copy_env_files(main, path, repo_cfg.get("copy") or [])
+        entry["copied_env"] = list(dict.fromkeys(previous + copied))
     own_ports = {p for pair in ports.values() for p in pair}
     risks = stacks.scan_risks(path, own_ports)
     entry["cors_risk"], entry["warnings"] = risks["cors_risk"], list(risks["findings"])
@@ -554,6 +558,7 @@ def up_one(args, state, state_dir, main, base_dir, branch):
     stopped = stopped_by_hook("post_create") if new_now else None
     if stopped:
         return stopped
+    entry["shared_database"] = stacks.shared_database_variables(path, entry.get("copied_env", []))
     for svc, svc_dir, st in prepared:
         name = svc["name"]
         if st["install"]:
@@ -1067,6 +1072,11 @@ def print_results(results, as_json):
             print("%s: %s" % (name, r["note"]))
         if r.get("log") and r.get("healthy"):
             print("%s: log %s" % (name, r["log"]))
+        if r.get("shared_database"):
+            names = ", ".join("%s (%s)" % (w["file"], w["variable"]) for w in r["shared_database"])
+            print("%s: WARNING copied database settings may be shared across branches: %s; "
+                  "use post_create/post_remove hooks for per-branch databases"
+                  % (name, names))
         remote = {}
         for w in r.get("warnings") or []:
             if w["kind"] == "remote-origin" and not w.get("auth"):

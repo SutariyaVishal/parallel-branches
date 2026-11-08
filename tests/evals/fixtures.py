@@ -23,6 +23,13 @@ FILES = {
         "serve.py": SERVE_PY,
         "index.html": "<!doctype html><title>demo</title><h1>demo</h1>\n",
     },
+    "db-env-app": {
+        "package.json": json.dumps({"name": "demo", "scripts": {"dev": DEV_SCRIPT}}, indent=2),
+        ".parallel-branches.json": json.dumps({"install": False}),
+        "serve.py": SERVE_PY,
+        ".gitignore": ".env\n",
+        ".env": "DATABASE_URL=postgres://synthetic-secret@db/example\n",
+    },
     # The dev app plus hooks: a marker written once the server is healthy, and a teardown command.
     "hooks-app": {
         "package.json": json.dumps({"name": "demo", "scripts": {"dev": DEV_SCRIPT}}, indent=2),

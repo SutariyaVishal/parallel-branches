@@ -46,6 +46,25 @@ Each branch gets a preferred port from a hash of its name (4000-4999) and probes
 
 When a worktree is created, git-ignored `.env` and `.env.*` files, and anything listed in `.worktreeinclude` or the config `copy` list, are copied from the main checkout. A pattern may also name a git-ignored directory (`.cache/`, `out/`): it is cloned whole, copy-on-write where the filesystem allows it, which carries warm build caches across. Existing files and directories are never overwritten, and tracked files and directories are never copied. `up --dry-run` lists what a new worktree would get.
 
+## Shared state
+
+Separate ports do not isolate databases. `up` and `up --dry-run` warn once per branch
+when env files copied from the main checkout contain common database variable names
+or database URL schemes. The warning lists file and variable names, never their values.
+It is a heuristic, not a guarantee that all shared state is detected. Values are not rewritten.
+
+Use hooks for per-branch databases, for example:
+
+```json
+{"hooks": {"post_create": "createdb {db_name}", "post_remove": "dropdb --if-exists {db_name}"}}
+```
+
+`post_create` runs after env copying and before install. Also update the worktree's env
+to use that database in your hook; that step depends on your project and is not included
+above. Review hook commands before running them. Real starts inspect copied settings after `post_create` succeeds; dry runs inspect
+before hooks run. A rewritten database URL or name still triggers the heuristic:
+changed text does not prove isolation. This is not a database connectivity or identity check.
+
 ## `.parallel-branches.json`
 
 Optional, at the repository root. The worktree's copy wins over the main checkout's.

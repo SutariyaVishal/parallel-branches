@@ -557,6 +557,73 @@ def copy_env_files(main, path, extra_patterns=()):
     return copied
 
 
+def copied_env_paths(path, files):
+    """Expand copied directories without following links or leaving the worktree."""
+    def safe(rel):
+        if os.path.isabs(rel):
+            return False
+        parts = os.path.normpath(rel).split(os.sep)
+        if parts[0] == "..":
+            return False
+        current = path
+        for part in parts:
+            current = os.path.join(current, part)
+            if os.path.islink(current):
+                return False
+        return True
+
+    found = set()
+    for rel in files:
+        rel = os.path.normpath(rel)
+        if not safe(rel):
+            continue
+        full = os.path.join(path, rel)
+        candidates = [rel]
+        if os.path.isdir(full):
+            candidates = []
+            for root, dirs, names in os.walk(full, followlinks=False):
+                dirs[:] = sorted(d for d in dirs if not os.path.islink(os.path.join(root, d)))
+                candidates.extend(os.path.relpath(os.path.join(root, name), path) for name in sorted(names))
+        for candidate in candidates:
+            name = os.path.basename(candidate)
+            if (name in (".env", ".envrc") or name.startswith(".env.") or name.endswith(".env")) and safe(candidate):
+                found.add(candidate)
+    return sorted(found)
+
+
+def env_assignments(filename):
+    """Read literal assignments only, never execute shell code or expand references."""
+    assignment = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$")
+    values = {}
+    for line in read_text(filename).splitlines():
+        match = assignment.match(line)
+        if not match:
+            continue
+        key, value = match.groups()
+        value = value.strip()
+        if value.startswith("#"):
+            value = ""
+        elif value and value[0] in ("\"", "'"):
+            value = value[1:].split(value[0], 1)[0]
+        values[key] = value
+    return values
+
+
+def shared_database_variables(path, files):
+    """Return file/variable names only; database identity and isolation are not inferred."""
+    found = []
+    keys = {"DATABASE_URL", "DB_URL", "MONGO_URI", "MONGODB_URI", "REDIS_URL",
+            "DB_NAME", "DB_DATABASE", "PGDATABASE", "POSTGRES_DB", "MYSQL_DATABASE"}
+    scheme = re.compile(r"^(jdbc:)?(postgres(ql)?|mysql|mariadb|mongodb(\+srv)?|rediss?)(\+\w+)?://", re.I)
+    for rel in copied_env_paths(path, files):
+        for key, value in env_assignments(os.path.join(path, rel)).items():
+            if not value.strip():
+                continue
+            if key.upper() in keys or scheme.match(value):
+                found.append({"file": rel, "variable": key})
+    return found
+
+
 # --------------------------------------------------------------- risk scanning
 
 def candidate_files(path, limit=60):

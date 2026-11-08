@@ -1,5 +1,8 @@
 # Changelog
 
+## Unreleased
+- Warn once per branch when copied env files contain database settings, including dry runs. Report only file and variable names; do not rewrite values.
+
 ## 0.10.0
 - Copying git-ignored files now also copies git-ignored directories named in `.worktreeinclude` or the config `copy` list (`.cache/`, `out/`), cloned copy-on-write where possible, so warm build caches carry over. A directory git would track is never copied; nothing in the worktree is overwritten.
 - `up --dry-run` lists the ignored files and directories a new worktree would get (`would_copy` in the JSON).

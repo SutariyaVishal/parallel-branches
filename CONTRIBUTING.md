@@ -7,7 +7,7 @@ Thanks for helping. This project is small on purpose: one script, no runtime dep
 ```
 python3 tests/validate_skill.py                 # skill + manifest rules
 python3 -m unittest discover tests/scripts      # unit and CLI tests (about three minutes)
-ruff check .                                    # lint (pip install ruff)
+ruff check --line-length 120 --target-version py39 --select E,F,W --extend-exclude tests/fixtures .   # lint (pip install ruff)
 ```
 
 The tests start real dev servers (`python3 -m http.server`) and, if Chrome or Chromium is installed, a headless browser. They clean up after themselves. Never put machine-wide commands such as `pkill` in a test that executes them.

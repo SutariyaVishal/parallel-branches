@@ -45,5 +45,5 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install ruff
-      - run: ruff check .
+      - run: ruff check --line-length 120 --target-version py39 --select E,F,W --extend-exclude tests/fixtures .
       - run: shellcheck tests/phase0/probe-ports.sh

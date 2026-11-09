@@ -5,7 +5,7 @@
 ## Checklist
 
 - [ ] `python3 tests/validate_skill.py` and `python3 -m unittest discover tests/scripts` pass
-- [ ] `ruff check .` passes
+- [ ] `ruff check --line-length 120 --target-version py39 --select E,F,W --extend-exclude tests/fixtures .` passes
 - [ ] New behaviour has a test, and a test that exercises it for real where it starts processes
 - [ ] `SKILL.md` and `references/` updated if behaviour an agent relies on changed
 - [ ] `CHANGELOG.md` has a line

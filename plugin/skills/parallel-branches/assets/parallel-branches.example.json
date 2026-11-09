@@ -1,0 +1,16 @@
+{
+  "cmd": "npm run dev -- --port {PORT} --strictPort",
+  "install": "npm ci",
+  "env": {
+    "API_URL": "http://localhost:8080"
+  },
+  "health_path": "/",
+  "copy": [
+    "config/local.json"
+  ],
+  "hooks": {
+    "post_create": "createdb {db_name}",
+    "post_start": "curl -fsS -X POST {URL}/seed",
+    "post_remove": "dropdb --if-exists {db_name}"
+  }
+}

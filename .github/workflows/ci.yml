@@ -47,3 +47,7 @@ jobs:
       - run: pip install ruff
       - run: ruff check --line-length 120 --target-version py39 --select E,F,W --extend-exclude tests/fixtures .
       - run: shellcheck tests/phase0/probe-ports.sh
+      - name: plugin/ matches skills/ and holds only files the directory accepts
+        run: python3 tools/build_directory_plugin.py --check
+      - name: The package builds
+        run: pip install build && python -m build

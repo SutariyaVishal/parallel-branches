@@ -6,6 +6,7 @@ Thanks for helping. This project is small on purpose: one script, no runtime dep
 
 ```
 python3 tests/validate_skill.py                 # skill + manifest rules
+python3 tools/build_directory_plugin.py --check # plugin/ is current (run without --check to rebuild it)
 python3 -m unittest discover tests/scripts      # unit and CLI tests (about three minutes)
 ruff check --line-length 120 --target-version py39 --select E,F,W --extend-exclude tests/fixtures .   # lint (pip install ruff)
 ```

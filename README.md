@@ -42,45 +42,67 @@ It stops only the processes it started, refuses to delete worktrees that have un
 
 ## Quick start
 
-![A dry run, then two branches started, listed, stopped and cleaned up](docs/demo.gif)
+![A dry run showing hooks and a database warning, then two branches started, their hooks listed, stopped and cleaned up](docs/demo.gif)
 
 With an agent, ask in plain words: *"run feature-login and fix-checkout side by side"*. It shows you the plan (a dry run) and waits for your OK before it starts anything. By hand, it looks like this.
 
-The animation replays real `pb` output from a two-branch run (typing and pauses are added, and the screen is cleared after the dry run). Below is the same session as text, with paths shortened. The project is a Node app whose `dev` script reads `PORT`.
+The animation replays real `pb` output from a two-branch run (typing and pauses are added, long lines are wrapped, and the screen is cleared after the dry run and after `up`). Below is the same session as text, with paths shortened. The project is a Node app whose `dev` script reads `PORT`. It has a git-ignored `.env` holding a `DATABASE_URL`, and two hooks in `.parallel-branches.json`: a `post_create` step that runs two commands at the same time, and a `post_start` command.
 
 ```
 $ pb up feature-login fix-checkout --dry-run
 BRANCH         URL  PORT  PID  PATH
 feature-login  -    4403  -    -
 fix-checkout   -    4174  -    -
+feature-login: hook post_create: together: [assets] echo warm asset cache [database] echo create database feature_login_2a4f
+feature-login: hook post_start: echo seed http://localhost:4403
 feature-login: stack node (low confidence)
 feature-login: command npm run dev
 feature-login: install: npm ci
+feature-login: would copy ignored files .env
 feature-login: dry run, nothing started (stack and warnings read from the main checkout)
+feature-login: WARNING copied database settings may be shared across branches: .env (DATABASE_URL); use post_create/post_remove hooks for per-branch databases
+fix-checkout: hook post_create: together: [assets] echo warm asset cache [database] echo create database fix_checkout_0653
+fix-checkout: hook post_start: echo seed http://localhost:4174
 fix-checkout: stack node (low confidence)
 fix-checkout: command npm run dev
 fix-checkout: install: npm ci
+fix-checkout: would copy ignored files .env
 fix-checkout: dry run, nothing started (stack and warnings read from the main checkout)
+fix-checkout: WARNING copied database settings may be shared across branches: .env (DATABASE_URL); use post_create/post_remove hooks for per-branch databases
 
 $ pb up feature-login fix-checkout
-BRANCH         URL                    PORT  PID   PATH
-feature-login  http://localhost:4403  4403  9262  ~/code/myapp.worktrees/feature-login
-fix-checkout   http://localhost:4174  4174  9306  ~/code/myapp.worktrees/fix-checkout
+BRANCH         URL                    PORT  PID    PATH
+feature-login  http://localhost:4403  4403  87921  ~/code/myapp.worktrees/feature-login
+fix-checkout   http://localhost:4174  4174  87963  ~/code/myapp.worktrees/fix-checkout
+feature-login: hook post_create ok (2 commands ran)
+feature-login: hook post_start ok (1 command ran)
 feature-login: stack node (low confidence)
 feature-login: command npm run dev
 feature-login: install: npm ci
+feature-login: copied env files .env
 feature-login: HTTP 200
 feature-login: log ~/code/myapp/.git/parallel-branches/logs/feature-login.log
+feature-login: WARNING copied database settings may be shared across branches: .env (DATABASE_URL); use post_create/post_remove hooks for per-branch databases
+fix-checkout: hook post_create ok (2 commands ran)
+fix-checkout: hook post_start ok (1 command ran)
 fix-checkout: stack node (low confidence)
 fix-checkout: command npm run dev
 fix-checkout: install: npm ci
+fix-checkout: copied env files .env
 fix-checkout: HTTP 200
 fix-checkout: log ~/code/myapp/.git/parallel-branches/logs/fix-checkout.log
+fix-checkout: WARNING copied database settings may be shared across branches: .env (DATABASE_URL); use post_create/post_remove hooks for per-branch databases
+
+$ pb hooks feature-login
+feature-login: hook post_create, last run ok (~/code/myapp/.git/parallel-branches/logs/feature-login.hook-post_create.log)
+    together: [assets] echo warm asset cache [database] echo create database feature_login_2a4f
+feature-login: hook post_start, last run ok (~/code/myapp/.git/parallel-branches/logs/feature-login.hook-post_start.log)
+    echo seed http://localhost:4403
 
 $ pb status
-BRANCH         URL                    STATUS   PID   DEV-BROWSER  PATH
-feature-login  http://localhost:4403  healthy  9262  -            ~/code/myapp.worktrees/feature-login
-fix-checkout   http://localhost:4174  healthy  9306  -            ~/code/myapp.worktrees/fix-checkout
+BRANCH         URL                    STATUS   PID    DEV-BROWSER  PATH
+feature-login  http://localhost:4403  healthy  87921  -            ~/code/myapp.worktrees/feature-login
+fix-checkout   http://localhost:4174  healthy  87963  -            ~/code/myapp.worktrees/fix-checkout
 
 $ pb down --all
 feature-login: stopped (port 4403 free)
@@ -90,6 +112,8 @@ $ pb clean --yes
 feature-login: removed worktree ~/code/myapp.worktrees/feature-login
 fix-checkout: removed worktree ~/code/myapp.worktrees/fix-checkout
 ```
+
+Look at what the dry run shows before anything starts: the hooks with their values filled in, the ignored file that would be copied, and a warning that every branch would share the one database named in `.env` (see [Hooks](#hooks)).
 
 Always start with `--dry-run`. The start command comes from your repository (`package.json` scripts, `.parallel-branches.json`) and runs in a shell on your machine, so read it first. A dry run changes nothing: no worktree, no process, no files under `.git`.
 

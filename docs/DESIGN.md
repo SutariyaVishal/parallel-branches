@@ -10,8 +10,8 @@ Working on two tasks means two branches, and checking both in a browser means st
 
 The space is crowded, so this is positioned on the whole loop and on zero configuration, not on worktree features.
 
-- **Worktree managers:** Worktrunk (hooks, a `hash_port` template filter, copying ignored files), git-worktree-runner, gwq, wtp, lazyworktree. Good at worktrees; ports and dev servers are left to hooks you write.
-- **Ports:** Portless (random port plus a local proxy).
+- **Worktree managers:** Worktrunk (hooks, a `hash_port` template filter, copying ignored files), git-worktree-runner, gwq, wtp, lazyworktree. Good at worktrees; dev servers and installs are left to hooks you write, and only Worktrunk has a port filter.
+- **Ports:** Portless (a port from 4000-4999, a local proxy with stable `.localhost` URLs and HTTPS, a subdomain per worktree, and it runs your dev command; no dependency install or health check in its README, November 2026).
 - **Apps:** Conductor (closed source), Vibe Kanban, Crystal.
 - **Agent tooling:** Claude Code's built-in worktrees (`.worktreeinclude`), obra/superpowers `using-git-worktrees` (creates the worktree and installs dependencies; no dev server, ports, env files or cleanup), and a few community skills with port pools.
 

@@ -177,13 +177,27 @@ Use that window only for the app it opened. With web security off, any site load
 
 ## How it compares
 
-This space has good tools, and you may prefer one of them:
+This space has good tools, and you may prefer one of them. What follows is from each project's own README in November 2026, so it will age, and a feature a README does not mention may still exist.
 
-- [Worktrunk](https://github.com/max-sixty/worktrunk), [git-worktree-runner](https://github.com/coderabbitai/git-worktree-runner) and [gwq](https://github.com/d-kuro/gwq) manage worktrees well, with hooks and editor or agent integration, but ports and dev servers are left to hooks you write.
-- [Portless](https://github.com/vercel-labs/portless) handles port allocation and a local proxy.
+- [Worktrunk](https://github.com/max-sixty/worktrunk) is the fullest worktree manager: `switch`, `list`, `merge`, an interactive picker, aliases, ten hooks with templates (including a `hash_port` filter that gives each worktree a port) and a `copy-ignored` step. Starting dev servers and installing dependencies are left to hooks you write.
+- [git-worktree-runner](https://github.com/coderabbitai/git-worktree-runner) and [gwq](https://github.com/d-kuro/gwq) manage worktrees with hooks or setup commands, editor and AI-tool launching (gtr) and status monitoring (gwq). Neither allocates ports. Dev servers and installs are left to commands you write.
+- [Portless](https://github.com/vercel-labs/portless) gives each app a stable `.localhost` URL, with HTTPS and a subdomain per worktree, through a local proxy, and runs your dev command with the port passed in. Its README does not cover installing dependencies or health checks.
 - Claude Code's built-in worktrees and obra/superpowers' `using-git-worktrees` create worktrees (the latter also installs dependencies) but do not run dev servers.
 
-`parallel-branches` aims at the whole loop for a repository you have not configured: detect the stack, share or install dependencies, allocate ports, start and health-check the servers, warn about what will break, and stop and clean up safely. It trades breadth of worktree features for that.
+### Where parallel-branches leads
+
+None of the tools above does the whole loop for a repository you have not configured. This one does, and these parts are what it has that their READMEs do not describe:
+
+- **One command from branch to URL.** It detects the stack, works out how that dev server takes a port, starts it, and prints the URL. No config file is needed for the common stacks.
+- **Dependencies without a hook.** It clones `node_modules` copy-on-write when the lockfile matches your main checkout, and otherwise installs with the right package manager, or builds a per-worktree Python virtual environment.
+- **A health check that means something.** It waits until the server answers, and, where `lsof` is available (macOS and most Linux), that the process on the port is the one it started, so a stale server on the same port is not reported as healthy.
+- **Warnings before they bite.** It flags hardcoded ports and URLs that will break on a new port, separates what a dev-mode browser cannot fix (OAuth redirects) from what it can (CORS), and opens that throwaway browser for you.
+- **Several services that find each other.** `{url.NAME}` and `{ports.NAME}` are filled in after every port is chosen, so a front end and its API start in either order.
+- **Safe stop and clean-up.** It stops only process groups it started, checks the recorded start time so a reused PID is never killed, refuses to delete worktrees with uncommitted work, and shows a dry run before anything is removed.
+- **Hooks that know the real ports.** They receive the port that was actually allocated and every service's URL, `post_start` runs after the health check (optionally in the background), steps can run commands concurrently, and teardown runs the commands you saw in the dry run.
+- **Nothing to install but Python.** It is one standard-library script for Python 3.9 and newer, tested in CI on Linux, macOS and native Windows.
+
+In return it has no `switch`, `list` or `merge`, no stable named URLs or HTTPS (so cookies are still shared between `localhost` ports), no editor or agent launcher, and far less mileage than the tools above. See [Limits](#limits).
 
 ## Safety
 

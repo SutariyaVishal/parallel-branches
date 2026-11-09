@@ -19,6 +19,10 @@ It does not edit tracked files, change git config, push, or touch the network ex
 | Two runs at once | State is written under a file lock. |
 | Option injection | Branch names starting with `-` are rejected, and git is called with argument lists, never through a shell. |
 
+## Environment and credentials
+
+Dev servers, install commands, hooks and the dev-mode browser inherit the environment of the shell that ran `pb`, so they see any variable you have set, such as `NPM_TOKEN`. `pb` does not read, store or send credentials itself. It reads only its own `PB_*` variables and the config-directory variables `XDG_CONFIG_HOME` and `APPDATA`, and its health checks go to `localhost`. It does copy git-ignored `.env` files into new worktrees, and `up --dry-run` lists them first.
+
 ## Commands from a repository
 
 `cmd`, `install` and `env` in `.parallel-branches.json`, and the `scripts` in `package.json`, run in a shell on the user's machine. A repository you do not trust can use them to run anything. Always show these commands (`up --dry-run`) and get a yes before the first run in an unfamiliar repository.

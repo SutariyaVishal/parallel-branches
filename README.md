@@ -215,6 +215,7 @@ This space has good tools, and you may prefer one of them:
 - `clean` is a dry run without `--yes`, skips running servers, and skips worktrees with uncommitted changes unless you pass `--force`.
 - Branch names starting with `-` are rejected, git is called with argument lists, and state is written under a file lock.
 - Commands in `.parallel-branches.json` (start commands and hooks) and in `package.json` run in a shell. Treat an unfamiliar repository the way you would before running `npm run dev` in it.
+- Dev servers, install commands and hooks run with your shell's environment, so they see variables such as `NPM_TOKEN` if you have set them. `pb` itself does not read, store or send any credential, and it makes no network request except to `localhost` for its health checks and the commands you ask it to run. It does copy your git-ignored `.env` files into each new worktree, which is what `pb up --dry-run` lists beforehand.
 
 More in [`skills/parallel-branches/references/safety.md`](skills/parallel-branches/references/safety.md). To report a vulnerability, see [SECURITY.md](SECURITY.md).
 

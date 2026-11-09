@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """parallel-branches: run several git branches side by side.
 
 Each branch gets its own git worktree, its own port and its own detached dev

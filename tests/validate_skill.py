@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Validate every skill under skills/ against the Agent Skills rules, plus the plugin manifests.
 
 Checks: frontmatter name/description limits, name matches the directory, body length,

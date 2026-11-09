@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Run the parallel-branches evals against real models with the Claude Code CLI.
 
 This SPENDS MONEY and lets a model run shell commands inside a throwaway repository, so it

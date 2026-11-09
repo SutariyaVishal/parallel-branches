@@ -233,7 +233,7 @@ More in [`skills/parallel-branches/references/safety.md`](skills/parallel-branch
 ```
 python3 tests/validate_skill.py                 # skill and manifest rules
 python3 -m unittest discover tests/scripts      # unit and CLI tests (about three minutes)
-ruff check .                                    # lint
+ruff check --line-length 120 --target-version py39 --select E,F,W --extend-exclude tests/fixtures .   # lint
 ```
 
 Behaviour of the skill with real models is checked by `tests/evals/` (ten scenarios, graded by deterministic rules). See [CONTRIBUTING.md](CONTRIBUTING.md) for how to add a stack and how to run the evals, which spend API money. [docs/DESIGN.md](docs/DESIGN.md) records the design decisions, measurements and known gaps, and [CHANGELOG.md](CHANGELOG.md) the releases. Everyone taking part is asked to follow the [code of conduct](CODE_OF_CONDUCT.md).

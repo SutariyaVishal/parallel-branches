@@ -169,18 +169,29 @@ def parse_background(cfg):
     return list(dict.fromkeys(raw))
 
 
-def db_name(branch):
-    """A name that is safe as a database or schema name and differs for branches like a/b and a-b."""
+def legacy_db_name(branch):
+    """The name used before the repo was part of it. Branches started then keep it, so teardown
+    drops the database that their post_create hook made."""
     base = re.sub(r"[^a-z0-9]+", "_", branch.lower()).strip("_")[:32] or "branch"
     return "%s_%s" % (base, hashlib.sha1(branch.encode("utf-8")).hexdigest()[:4])
 
 
-def context(branch, slug, worktree, main, service_ports, primary):
+def db_name(branch, repo):
+    """A name that is safe as a database or schema name, differs for branches like a/b and a-b,
+    and differs for the same branch in two repos (the repo folder name and its full path go in)."""
+    base = re.sub(r"[^a-z0-9]+", "_", branch.lower()).strip("_")[:32] or "branch"
+    owner = re.sub(r"[^a-z0-9]+", "_", os.path.basename(os.path.normpath(repo)).lower()).strip("_")[:16] or "repo"
+    digest = hashlib.sha1(("%s\0%s" % (os.path.realpath(repo), branch)).encode("utf-8")).hexdigest()[:4]
+    return "%s_%s_%s" % (owner, base, digest)
+
+
+def context(branch, slug, worktree, main, service_ports, primary, db=None):
     """Template values. `service_ports` maps service name (None for a single unnamed one) to
-    (port, hmr_port); `primary` is the name of the service whose URL is the branch URL."""
+    (port, hmr_port); `primary` is the name of the service whose URL is the branch URL; `db` is the
+    database name chosen when the branch was first started."""
     port, hmr = service_ports[primary]
     named = {name: pair[0] for name, pair in service_ports.items() if name}
-    return {"branch": branch, "branch_slug": slug, "db_name": db_name(branch), "worktree": worktree,
+    return {"branch": branch, "branch_slug": slug, "db_name": db or db_name(branch, main), "worktree": worktree,
             "repo": main, "PORT": port, "HMR_PORT": hmr, "URL": "http://localhost:%d" % port,
             "ports": named}
 
@@ -190,7 +201,8 @@ def context_from_entry(entry, main, slug):
     service_ports = {entry.get("service"): (entry["port"], entry["hmr_port"])}
     for extra in entry.get("extras") or []:
         service_ports[extra["service"]] = (extra["port"], extra["hmr_port"])
-    return context(entry["branch"], slug, entry["path"], main, service_ports, entry.get("service"))
+    return context(entry["branch"], slug, entry["path"], main, service_ports, entry.get("service"),
+                   db=entry.get("db_name") or legacy_db_name(entry["branch"]))
 
 
 def render(text, ctx):

@@ -69,10 +69,25 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(hooks.render("echo {branch}", ctx), "echo 'a$(touch${IFS}x)'")
 
     def test_db_name_is_safe_and_distinguishes_lookalike_branches(self):
-        a, b = hooks.db_name("feat/a"), hooks.db_name("feat-a")
+        a, b = hooks.db_name("feat/a", "/repo"), hooks.db_name("feat-a", "/repo")
         self.assertNotEqual(a, b)
-        for name in (a, b, hooks.db_name("Ünï/cødé!!"), hooks.db_name("///")):
+        for name in (a, b, hooks.db_name("Ünï/cødé!!", "/repo"), hooks.db_name("///", "/repo"),
+                     hooks.db_name("feat", "/Ünï/!!")):
             self.assertRegex(name, r"^[a-z0-9_]+$")
+            self.assertLessEqual(len(name), 63)  # the Postgres identifier limit
+
+    def test_db_name_differs_for_the_same_branch_in_two_repos(self):
+        self.assertNotEqual(hooks.db_name("feat-a", "/work/shop"), hooks.db_name("feat-a", "/work/blog"))
+        # even when the folders have the same name
+        self.assertNotEqual(hooks.db_name("feat-a", "/one/app"), hooks.db_name("feat-a", "/two/app"))
+        self.assertTrue(hooks.db_name("feat-a", "/work/shop").startswith("shop_feat_a_"))
+
+    def test_entries_without_a_stored_name_keep_the_old_name(self):
+        entry = {"branch": "feat/a", "path": "/w", "port": 4001, "hmr_port": 4002}
+        self.assertEqual(hooks.context_from_entry(entry, "/repo", "feat-a")["db_name"],
+                         hooks.legacy_db_name("feat/a"))
+        self.assertEqual(hooks.context_from_entry(dict(entry, db_name="kept"), "/repo", "feat-a")["db_name"],
+                         "kept")
 
 
 class HookLogEncodingTests(unittest.TestCase):
@@ -182,7 +197,7 @@ class ConcurrentStepTests(unittest.TestCase):
         self.assertEqual(cmds["post_create"], [{"db": "createdb {db_name}", "deps": "make deps"}])
         self.assertEqual(hooks.describe(cmds["pre_start"][1], self.ctx), "together: [x] b 4100")
         self.assertRegex(hooks.describe(cmds["post_create"][0], self.ctx),
-                         r"^together: \[db\] createdb feat_a_[0-9a-f]{4} \[deps\] make deps$")
+                         r"^together: \[db\] createdb \w+_feat_a_[0-9a-f]{4} \[deps\] make deps$")
         for bad in ({}, {"db": ""}, {"db": 3}, {"bad name": "x"}, [{"ok": "x"}, {}]):
             with self.assertRaises(ValueError):
                 hooks.parse({"hooks": {"post_create": bad}})
@@ -274,6 +289,38 @@ class HookCase(PbCase):
 
 
 class LifecycleTests(HookCase):
+    def test_db_name_is_stored_at_up_and_reused_at_teardown(self):
+        self.config({"post_create": self.probe("post_create", "{db_name}"),
+                     "post_remove": self.probe("post_remove", "{db_name}")})
+        proc, rows = self.up("feat-a")
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        name = hooks.db_name("feat-a", os.path.realpath(self.repo))
+        self.assertEqual(self.records()[0]["args"], [name])
+        state_path = os.path.join(self.repo, ".git", "parallel-branches", "state.json")
+        with open(state_path) as fh:
+            state = json.load(fh)
+        self.assertEqual(state["branches"]["feat-a"]["db_name"], name)
+        state["branches"]["feat-a"]["db_name"] = "chosen_at_up"  # a later change must not matter
+        with open(state_path, "w") as fh:
+            json.dump(state, fh)
+        self.pb("down", "feat-a")
+        self.assertEqual(self.pb("clean", "--yes").returncode, 0)
+        self.assertEqual(self.records()[-1]["args"], ["chosen_at_up"])
+
+    def test_branches_started_before_the_repo_was_in_the_name_drop_the_old_database(self):
+        self.config({"post_remove": self.probe("post_remove", "{db_name}")})
+        proc, rows = self.up("feat-a")
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        state_path = os.path.join(self.repo, ".git", "parallel-branches", "state.json")
+        with open(state_path) as fh:
+            state = json.load(fh)
+        del state["branches"]["feat-a"]["db_name"]  # what a registry from 0.14 looks like
+        with open(state_path, "w") as fh:
+            json.dump(state, fh)
+        self.pb("down", "feat-a")
+        self.assertEqual(self.pb("clean", "--yes").returncode, 0)
+        self.assertEqual(self.records()[-1]["args"], [hooks.legacy_db_name("feat-a")])
+
     def test_every_event_runs_in_order_with_the_real_ports(self):
         self.config({"post_create": self.probe("post_create", "{PORT}"),
                      "pre_start": self.probe("pre_start", "{URL}"),
@@ -316,7 +363,7 @@ class LifecycleTests(HookCase):
         self.assertEqual((env["PB_HOOK"], env["PB_BRANCH"], env["PB_PORT"]),
                          ("post_start", "feat-a", str(rows[0]["port"])))
         self.assertEqual(env["PB_URL"], "http://localhost:%d" % rows[0]["port"])
-        self.assertTrue(env["PB_DB_NAME"].startswith("feat_a_"))
+        self.assertTrue(env["PB_DB_NAME"].startswith("proj_feat_a_"))
 
     def test_services_see_each_others_urls(self):
         self.config({"post_start": self.probe("svc", "{url.api}", "{url.web}")},
@@ -332,8 +379,8 @@ class LifecycleTests(HookCase):
         self.config({"post_start": "seed --port {PORT} --db {db_name}", "post_remove": "drop {db_name}"})
         proc = self.pb("up", "feat-a", "--cmd", SERVER, "--worktree-dir", self.wt, "--dry-run")
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertRegex(proc.stdout, r"feat-a: hook post_start: seed --port \d+ --db feat_a_[0-9a-f]{4}")
-        self.assertIn("feat-a: hook post_remove: drop feat_a_", proc.stdout)
+        self.assertRegex(proc.stdout, r"feat-a: hook post_start: seed --port \d+ --db proj_feat_a_[0-9a-f]{4}")
+        self.assertIn("feat-a: hook post_remove: drop proj_feat_a_", proc.stdout)
         self.assertFalse(os.path.exists(os.path.join(self.repo, ".git", "parallel-branches")))
         self.assertFalse(os.path.exists(os.path.join(self.wt, "feat-a")))
 
@@ -483,7 +530,7 @@ class HookCommandTests(HookCase):
         before = self.state_text()
         proc = self.pb("hook", "pre_stop", "feat-a", "--dry-run")
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertRegex(proc.stdout, r"feat-a: hook pre_stop: .*pre_stop feat_a_[0-9a-f]{4}")
+        self.assertRegex(proc.stdout, r"feat-a: hook pre_stop: .*pre_stop proj_feat_a_[0-9a-f]{4}")
         self.assertEqual(self.labels(), [])
         self.assertEqual(self.state_text(), before)
 
@@ -602,7 +649,7 @@ class HooksShowTests(HookCase):
         _, rows = self.up("feat-a")
         proc = self.pb("hooks", "feat-a", "-v")
         self.assertIn("values (the same as PB_* environment variables)", proc.stdout)
-        self.assertRegex(proc.stdout, r"db_name\s+feat_a_[0-9a-f]{4}")
+        self.assertRegex(proc.stdout, r"db_name\s+proj_feat_a_[0-9a-f]{4}")
         self.assertRegex(proc.stdout, r"PORT\s+%d" % rows[0]["port"])
         data = json.loads(self.pb("hooks", "--json").stdout)
         self.assertEqual(data[0]["branch"], "feat-a")

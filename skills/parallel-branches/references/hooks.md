@@ -49,7 +49,7 @@ Substituted into the command text, and always shell-quoted, because a branch nam
 |---|---|
 | `{branch}` | The branch name |
 | `{branch_slug}` | The branch name made safe for file names |
-| `{db_name}` | A lowercase, underscore-only name for databases and schemas, with a short hash so `feat/a` and `feat-a` differ |
+| `{db_name}` | A lowercase, underscore-only name for databases and schemas: the repo folder name, the branch name and a short hash of the repo path and branch, so `feat/a` and `feat-a` differ, and so does the same branch in two repos that share one database server. It is fixed when the branch is first started, so teardown drops the database that `post_create` made |
 | `{worktree}`, `{repo}` | Paths of the branch's worktree and of the main checkout |
 | `{PORT}`, `{HMR_PORT}`, `{URL}` | Port, HMR port and `http://localhost:PORT` of the primary service |
 | `{ports.NAME}`, `{url.NAME}` | Port and URL of another service, as in service commands |

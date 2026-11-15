@@ -501,6 +501,8 @@ def describe_run(run):
 def up_one(args, state, state_dir, main, base_dir, branch):
     """Start one branch: its worktree and every service. Returns (result_row, failed)."""
     existing = state["branches"].get(branch)
+    db_name = (existing or {}).get("db_name") or (hooks.legacy_db_name(branch) if existing
+                                                   else hooks.db_name(branch, main))
     if existing and branch_running(existing):
         return dict(existing, note="already running"), False
     if existing and any_running(existing):
@@ -573,7 +575,7 @@ def up_one(args, state, state_dir, main, base_dir, branch):
         if hook_cmds:
             where = known or os.path.join(base_dir, slugify(branch))
             row["hook_preview"] = hooks.preview(hook_cmds, hooks.context(branch, slugify(branch), where, main,
-                                                                  ports, primary_name), hook_sources)
+                                                                  ports, primary_name, db_name), hook_sources)
             for item in row["hook_preview"]:
                 if item["event"] in background:
                     item["background"] = True
@@ -583,7 +585,7 @@ def up_one(args, state, state_dir, main, base_dir, branch):
     os.makedirs(log_dir, exist_ok=True)
     slug = slugify(branch)
     entry = {"branch": branch, "path": path, "created_worktree": created, "started_at": int(time.time()),
-             "status": "failed", "extras": []}
+             "status": "failed", "extras": [], "db_name": db_name}
     if multi:
         entry["service_order"] = [svc["name"] for svc, _, _ in prepared]
     if hook_cmds:
